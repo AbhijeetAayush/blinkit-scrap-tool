@@ -1,0 +1,17 @@
+.aws-sam/
+samconfig.toml
+infra/sam/samconfig.toml
+env.json
+infra/sam/env.json
+.env
+.env.local
+apps/web/.env.local
+__pycache__/
+.venv/
+venv/
+node_modules/
+.next/
+*.pyc
+.pytest_cache/
+dist/
+*.egg-info/
