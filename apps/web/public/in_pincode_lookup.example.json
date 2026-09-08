@@ -1,0 +1,32 @@
+{
+  "000001": {
+    "city": "DemoCity",
+    "locality": "Area One",
+    "lat": 12.9352,
+    "lon": 77.6245
+  },
+  "000002": {
+    "city": "DemoCity",
+    "locality": "Area Two",
+    "lat": 12.9121,
+    "lon": 77.6446
+  },
+  "000003": {
+    "city": "DemoCity",
+    "locality": "Area Three",
+    "lat": 12.9698,
+    "lon": 77.75
+  },
+  "560034": {
+    "city": "Bengaluru",
+    "locality": "Koramangala",
+    "lat": 12.9352,
+    "lon": 77.6245
+  },
+  "560001": {
+    "city": "Bengaluru",
+    "locality": "Cubbon Park",
+    "lat": 12.9767,
+    "lon": 77.599
+  }
+}
