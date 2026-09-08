@@ -1,0 +1,10 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "blinkit-shelf-dev"
+region = "ap-south-1"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+# Do not put API keys here. Paste them at `sam deploy --guided`.
+# If guided writes samconfig.toml with secrets, keep that file gitignored.

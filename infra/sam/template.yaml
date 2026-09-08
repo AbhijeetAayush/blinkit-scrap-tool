@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Blinkit brand shelf intelligence workers (no Secrets Manager)
+
+Parameters:
+  SupabaseUrl:
+    Type: String
+    NoEcho: true
+  SupabaseServiceRoleKey:
+    Type: String
+    NoEcho: true
+  ZenRowsApiKey:
+    Type: String
+    NoEcho: true
+  ScrapingBeeApiKey:
+    Type: String
+    NoEcho: true
+  UpstashRedisUrl:
+    Type: String
+    NoEcho: true
+  UpstashRedisToken:
+    Type: String
+    NoEcho: true
+  QstashUrl:
+    Type: String
+    Default: "https://qstash-us-east-1.upstash.io"
+  QstashToken:
+    Type: String
+    NoEcho: true
+  QstashCurrentSigningKey:
+    Type: String
+    NoEcho: true
+  QstashNextSigningKey:
+    Type: String
+    NoEcho: true
+  UnlockerSearch:
+    Type: String
+    Default: scrapingbee
+  UnlockerLocation:
+    Type: String
+    Default: scrapingbee
+  UnlockerFailover:
+    Type: String
+    Default: "true"
+  DailyCreditBudget:
+    Type: Number
+    Default: 400
+  FailFast:
+    Type: String
+    Default: "true"
+  ScrapeSpreadSeconds:
+    Type: Number
+    Default: 3
+  DefaultVelocity:
+    Type: Number
+    Default: 5
+  MaxStoresPerDispatch:
+    Type: Number
+    Default: 500
+  MatchAutoCommit:
+    Type: Number
+    Default: 0.95
+  ShareOfSearchN:
+    Type: Number
+    Default: 20
+  PinPageSize:
+    Type: Number
+    Default: 500
+  ManualRunSecret:
+    Type: String
+    NoEcho: true
+    Default: ""
+
+Globals:
+  Function:
+    Runtime: python3.12
+    MemorySize: 1024
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        SUPABASE_URL: !Ref SupabaseUrl
+        SUPABASE_SERVICE_ROLE_KEY: !Ref SupabaseServiceRoleKey
+        ZENROWS_API_KEY: !Ref ZenRowsApiKey
+        SCRAPINGBEE_API_KEY: !Ref ScrapingBeeApiKey
+        UPSTASH_REDIS_URL: !Ref UpstashRedisUrl
+        UPSTASH_REDIS_TOKEN: !Ref UpstashRedisToken
+        QSTASH_TOKEN: !Ref QstashToken
+        QSTASH_URL: !Ref QstashUrl
+        QSTASH_CURRENT_SIGNING_KEY: !Ref QstashCurrentSigningKey
+        QSTASH_NEXT_SIGNING_KEY: !Ref QstashNextSigningKey
+        UNLOCKER_SEARCH: !Ref UnlockerSearch
+        UNLOCKER_LOCATION: !Ref UnlockerLocation
+        UNLOCKER_FAILOVER: !Ref UnlockerFailover
+        DAILY_CREDIT_BUDGET: !Ref DailyCreditBudget
+        FAIL_FAST: !Ref FailFast
+        SCRAPE_SPREAD_SECONDS: !Ref ScrapeSpreadSeconds
+        DEFAULT_VELOCITY: !Ref DefaultVelocity
+        MAX_STORES_PER_DISPATCH: !Ref MaxStoresPerDispatch
+        MATCH_AUTO_COMMIT: !Ref MatchAutoCommit
+        SHARE_OF_SEARCH_N: !Ref ShareOfSearchN
+        PIN_PAGE_SIZE: !Ref PinPageSize
+        S3_BUCKET: !Ref DataBucket
+        MANUAL_RUN_SECRET: !Ref ManualRunSecret
+
+Resources:
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AbortIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+
+  DispatchFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: python3.12
+    Properties:
+      CodeUri: ../../services/workers
+      Handler: src.aws.dispatch.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          SCRAPE_FUNCTION_URL: !GetAtt ScrapeStoreFunctionUrl.FunctionUrl
+          RESOLVE_FUNCTION_URL: !GetAtt ResolveStoresFunctionUrl.FunctionUrl
+          SCRAPE_FUNCTION_NAME: !Ref ScrapeStoreFunction
+          RESOLVE_FUNCTION_NAME: !Ref ResolveStoresFunction
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ScrapeStoreFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ResolveStoresFunction
+        - Statement:
+            - Effect: Allow
+              Action:
+                - lambda:InvokeFunction
+              Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-DispatchFunction-*
+
+  ScrapeStoreFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: python3.12
+    Properties:
+      CodeUri: ../../services/workers
+      Handler: src.aws.scrape_store.handler
+      Timeout: 180
+      Environment:
+        Variables:
+          DERIVE_FUNCTION_URL: !GetAtt DeriveFunctionUrl.FunctionUrl
+          DERIVE_FUNCTION_NAME: !Ref DeriveFunction
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+        - LambdaInvokePolicy:
+            FunctionName: !Ref DeriveFunction
+
+  DeriveFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: python3.12
+    Properties:
+      CodeUri: ../../services/workers
+      Handler: src.aws.derive.handler
+      Timeout: 120
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+
+  ResolveStoresFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: python3.12
+    Properties:
+      CodeUri: ../../services/workers
+      Handler: src.aws.resolve_stores.handler
+      Timeout: 120
+      FunctionUrlConfig:
+        AuthType: NONE
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DataBucket
+
+Outputs:
+  DispatchUrl:
+    Description: Dispatch Function URL
+    Value: !GetAtt DispatchFunctionUrl.FunctionUrl
+  ScrapeStoreUrl:
+    Description: ScrapeStore Function URL
+    Value: !GetAtt ScrapeStoreFunctionUrl.FunctionUrl
+  DeriveUrl:
+    Description: Derive Function URL
+    Value: !GetAtt DeriveFunctionUrl.FunctionUrl
+  ResolveStoresUrl:
+    Description: ResolveStores Function URL
+    Value: !GetAtt ResolveStoresFunctionUrl.FunctionUrl
+  DataBucketName:
+    Description: Observation lake bucket
+    Value: !Ref DataBucket
