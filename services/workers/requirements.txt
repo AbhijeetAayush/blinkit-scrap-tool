@@ -1,0 +1,10 @@
+httpx
+pydantic>=2
+supabase
+PyJWT
+rapidfuzz
+selectolax
+boto3
+python-dateutil
+upstash-redis
+tzdata
