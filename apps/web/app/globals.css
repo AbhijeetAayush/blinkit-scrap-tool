@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  background: #f3eee3;
+  color: #16180f;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
