@@ -11,7 +11,12 @@ export default async function RunsPage() {
   const brandId = await currentBrandId();
   if (!brandId) redirect("/onboarding");
   const supabase = await createClient();
-  const { data } = await supabase.from("runs").select("*").order("started_at", { ascending: false }).limit(100);
+  const { data } = await supabase
+    .from("runs")
+    .select("*")
+    .eq("brand_id", brandId)
+    .order("started_at", { ascending: false })
+    .limit(100);
   const rows = (data as RunRow[] | null) ?? [];
 
   return (

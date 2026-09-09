@@ -24,6 +24,13 @@ export type Sku = {
   active: boolean;
 };
 
+export type Keyword = {
+  id: string;
+  brand_id: string;
+  query: string;
+  active: boolean;
+};
+
 export type CoveragePin = {
   id: string;
   brand_id: string;
@@ -31,6 +38,7 @@ export type CoveragePin = {
   pincode: string;
   city: string | null;
   locality: string | null;
+  store_name: string | null;
   lat: number;
   lon: number;
   tier: PinTier;
@@ -43,16 +51,25 @@ export type LatestObservation = {
   product_id: string;
   sku_name: string;
   brand_name: string | null;
+  pack_raw: string | null;
+  pack_ml: number | null;
+  pack_g: number | null;
   selling_price: number | null;
   mrp: number | null;
+  discount_percent: number | null;
+  discount_text: string | null;
   availability: Availability;
   inventory_shown: number | null;
   shelf_position: number | null;
   organic_rank: number | null;
   is_sponsored: boolean | null;
+  rating: number | null;
+  rating_count: number | null;
   sku_id: string | null;
   sku_role: SkuRole | null;
+  search_query: string | null;
   unit_price_per_l: number | null;
+  unit_price_per_kg: number | null;
   observed_slot: string;
   platform: string;
 };

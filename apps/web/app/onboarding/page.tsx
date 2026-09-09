@@ -62,7 +62,7 @@ export default function OnboardingPage() {
       <SetupStepper current="onboarding" />
       <h1 className="font-display text-3xl">Name the brand you track</h1>
       <p className="mt-2 text-ink/70">
-        Add SKUs, a pincode, and run the scrape on the next screen — one page.
+        Add keywords and store locations on the next screen, check the rows to scrape, then run.
       </p>
       <form onSubmit={onSubmit} className="mt-8 space-y-4 rounded-2xl border border-ink/10 bg-white/60 p-6">
         <label className="block text-sm">

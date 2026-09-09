@@ -6,6 +6,19 @@ import type { LatestObservation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+function packLabel(row: LatestObservation): string {
+  if (row.pack_raw) return row.pack_raw;
+  if (row.pack_g) return `${row.pack_g} g`;
+  if (row.pack_ml) return `${row.pack_ml} ml`;
+  return "—";
+}
+
+function unitPrice(row: LatestObservation): string {
+  if (row.unit_price_per_kg != null) return `₹${row.unit_price_per_kg}/kg`;
+  if (row.unit_price_per_l != null) return `₹${row.unit_price_per_l}/L`;
+  return "—";
+}
+
 export default async function PinDetailPage({ params }: { params: Promise<{ pincode: string }> }) {
   const brandId = await currentBrandId();
   if (!brandId) redirect("/onboarding");
@@ -25,30 +38,42 @@ export default async function PinDetailPage({ params }: { params: Promise<{ pinc
   return (
     <div>
       <h1 className="font-display text-3xl">Pin {pincode}</h1>
-      <p className="mt-1 text-ink/70">Latest listings for this catchment, same merchant facts cloned per mapped pin.</p>
+      <p className="mt-1 text-ink/70">Latest harvest listings for this pincode. Same product can appear twice if two keywords returned it.</p>
       <div className="mt-6 overflow-x-auto rounded-2xl border border-ink/10 bg-white/70">
-        <table className="w-full text-left text-sm">
+        <table className="w-full min-w-[1100px] text-left text-sm">
           <thead className="bg-ink/5 text-ink/60">
             <tr>
-              <th className="px-3 py-2">Product</th>
+              <th className="px-3 py-2">Name</th>
               <th className="px-3 py-2">Brand</th>
-              <th className="px-3 py-2">Price</th>
+              <th className="px-3 py-2">Pack</th>
+              <th className="px-3 py-2">MRP</th>
+              <th className="px-3 py-2">Selling</th>
+              <th className="px-3 py-2">Discount %</th>
+              <th className="px-3 py-2">Sponsored</th>
+              <th className="px-3 py-2">Rating</th>
+              <th className="px-3 py-2">Keyword</th>
               <th className="px-3 py-2">Stock</th>
               <th className="px-3 py-2">Rank</th>
-              <th className="px-3 py-2">Inventory shown</th>
+              <th className="px-3 py-2">₹/kg or ₹/L</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.product_id} className="border-t border-ink/5">
+              <tr key={`${row.product_id}-${row.search_query ?? ""}`} className="border-t border-ink/5">
                 <td className="px-3 py-2">{row.sku_name}</td>
-                <td className="px-3 py-2">{row.brand_name}</td>
+                <td className="px-3 py-2">{row.brand_name ?? "—"}</td>
+                <td className="px-3 py-2">{packLabel(row)}</td>
+                <td className="px-3 py-2 tabular">{row.mrp ?? "—"}</td>
                 <td className="px-3 py-2 tabular">{row.selling_price ?? "—"}</td>
+                <td className="px-3 py-2 tabular">{row.discount_percent ?? "—"}</td>
+                <td className="px-3 py-2">{row.is_sponsored ? "yes" : "—"}</td>
+                <td className="px-3 py-2 tabular">{row.rating ?? "—"}</td>
+                <td className="px-3 py-2">{row.search_query || "—"}</td>
                 <td className={`px-3 py-2 ${row.availability === "in_stock" ? "text-stock" : "text-oos"}`}>
                   {row.availability}
                 </td>
                 <td className="px-3 py-2 tabular">{row.shelf_position ?? "—"}</td>
-                <td className="px-3 py-2 tabular">{row.inventory_shown ?? "—"}</td>
+                <td className="px-3 py-2 tabular">{unitPrice(row)}</td>
               </tr>
             ))}
           </tbody>

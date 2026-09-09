@@ -4,7 +4,7 @@ import Link from "next/link";
 
 const STEPS = [
   { href: "/onboarding", label: "1. Brand" },
-  { href: "/setup", label: "2. SKUs + pin" },
+  { href: "/setup", label: "2. Keywords + locations" },
   { href: "/dashboard", label: "3. Shelf" },
 ] as const;
 

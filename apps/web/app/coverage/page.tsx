@@ -13,7 +13,7 @@ export default function CoveragePage() {
     <div>
       <SetupStepper current="setup" />
       <h1 className="font-display text-3xl">Coverage</h1>
-      <p className="mt-1 text-ink/70">Add real pincodes. Use Setup to add SKUs and run without leaving the page.</p>
+      <p className="mt-1 text-ink/70">Add store locations. Check rows and run from Setup.</p>
       <div className="mt-6">
         <CoverageManager brandId={brandId} />
       </div>

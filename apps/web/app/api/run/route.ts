@@ -1,16 +1,74 @@
 import { qstashTokenProblem } from "@/lib/qstash-token";
+import { currentBrandId } from "@/lib/brand";
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
 export const maxDuration = 120;
 
-export async function POST() {
+async function chunkIn(table: string, ids: string[], brandId: string): Promise<string[]> {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
+  const found: string[] = [];
+  for (let i = 0; i < ids.length; i += 100) {
+    const slice = ids.slice(i, i + 100);
+    const { data, error } = await supabase.from(table).select("id").eq("brand_id", brandId).in("id", slice);
+    if (error) throw new Error(error.message);
+    found.push(...((data ?? []) as { id: string }[]).map((r) => r.id));
+  }
+  return found;
+}
+
+function dispatchClientError(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as {
+      status?: string;
+      error?: string;
+      remaining?: number;
+      needed?: number;
+      pages?: number;
+    };
+    if (parsed.status === "budget") {
+      return `Not enough ScrapingBee credits for ${parsed.pages} searches (need ${parsed.needed}, remaining ${parsed.remaining}). Select fewer rows.`;
+    }
+    if (parsed.status === "error") {
+      return parsed.error || "Dispatch rejected the run";
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function POST(request: Request) {
+  const brandId = await currentBrandId();
+  if (!brandId) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  let body: { keyword_ids?: unknown; pincode_ids?: unknown } = {};
+  try {
+    body = (await request.json()) as { keyword_ids?: unknown; pincode_ids?: unknown };
+  } catch {
+    return NextResponse.json({ error: "JSON body required" }, { status: 400 });
+  }
+  const keywordIds = Array.isArray(body.keyword_ids) ? body.keyword_ids.map(String) : [];
+  const pincodeIds = Array.isArray(body.pincode_ids) ? body.pincode_ids.map(String) : [];
+  if (!keywordIds.length || !pincodeIds.length) {
+    return NextResponse.json({ error: "Select at least one keyword and one location" }, { status: 400 });
+  }
+
+  let ownedKeywords: string[];
+  let ownedPins: string[];
+  try {
+    ownedKeywords = await chunkIn("keywords", keywordIds, brandId);
+    ownedPins = await chunkIn("pincodes", pincodeIds, brandId);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Could not verify selection. Apply migration 0003 if keywords table is missing." },
+      { status: 500 },
+    );
+  }
+  if (ownedKeywords.length !== keywordIds.length || ownedPins.length !== pincodeIds.length) {
+    return NextResponse.json({ error: "Selection includes ids that are not in your brand" }, { status: 400 });
   }
 
   const dispatchUrl = process.env.DISPATCH_URL;
@@ -20,6 +78,13 @@ export async function POST() {
   if (!dispatchUrl) {
     return NextResponse.json({ error: "DISPATCH_URL missing in apps/web/.env.local" }, { status: 500 });
   }
+
+  const payload = {
+    slot_kind: "manual",
+    brand_id: brandId,
+    keyword_ids: ownedKeywords,
+    pincode_ids: ownedPins,
+  };
 
   const tokenProblem = token ? qstashTokenProblem(token) : "QSTASH_TOKEN missing";
   const canQstash = Boolean(token) && !tokenProblem;
@@ -32,7 +97,7 @@ export async function POST() {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ slot_kind: "manual" }),
+      body: JSON.stringify(payload),
     });
     const text = await res.text();
     if (!res.ok) {
@@ -57,7 +122,7 @@ export async function POST() {
       "Content-Type": "application/json",
       "x-run-secret": runSecret,
     },
-    body: JSON.stringify({ slot_kind: "manual" }),
+    body: JSON.stringify(payload),
   });
   const text = await res.text();
   if (!res.ok) {
@@ -65,6 +130,10 @@ export async function POST() {
       { error: `Dispatch ${res.status}: ${text.slice(0, 280)}`, upstream: res.status },
       { status: 502 },
     );
+  }
+  const dispatchError = dispatchClientError(text);
+  if (dispatchError) {
+    return NextResponse.json({ error: dispatchError }, { status: 400 });
   }
   return NextResponse.json({ ok: true, via: "dispatch", body: text.slice(0, 500) });
 }

@@ -1,17 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/client";
+import { useBrandId } from "@/lib/use-brand";
 import type { RunRow } from "@/lib/types";
 
-export function RunNowButton() {
+export function RunNowButton({
+  keywordIds = [],
+  pincodeIds = [],
+  pages,
+}: {
+  keywordIds?: string[];
+  pincodeIds?: string[];
+  pages?: number;
+}) {
   const [busy, setBusy] = useState(false);
   const [watch, setWatch] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const router = useRouter();
+  const { brandId } = useBrandId();
 
   useEffect(() => {
     if (!watch) return;
@@ -20,7 +31,9 @@ export function RunNowButton() {
       ticks += 1;
       void (async () => {
         const supabase = createClient();
-        const { data } = await supabase.from("runs").select("*").order("started_at", { ascending: false }).limit(1);
+        let q = supabase.from("runs").select("*").order("started_at", { ascending: false }).limit(1);
+        if (brandId) q = q.eq("brand_id", brandId);
+        const { data } = await q;
         const run = (data as RunRow[] | null)?.[0];
         if (run && run.status !== "running") {
           setMessage(`Last run: ${run.kind} · ${run.status}${run.error ? ` · ${run.error}` : ""}. Open Shelf if rows appeared.`);
@@ -37,15 +50,29 @@ export function RunNowButton() {
       })();
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [watch, router]);
+  }, [watch, router, brandId]);
+
+  if (keywordIds.length === 0 || pincodeIds.length === 0) {
+    return (
+      <Link href="/setup" className="rounded-full bg-ink px-4 py-2 text-sm text-lime">
+        Select keywords and locations
+      </Link>
+    );
+  }
 
   async function run() {
+    const n = pages ?? keywordIds.length * pincodeIds.length;
+    if (n > 50 && !window.confirm(`This is ${n} ScrapingBee searches. Continue?`)) return;
     setBusy(true);
     setWatch(false);
     setFailed(false);
     setMessage("Starting scrape…");
     try {
-      const res = await fetch("/api/run", { method: "POST" });
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword_ids: keywordIds, pincode_ids: pincodeIds }),
+      });
       const payload = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
         setFailed(true);
@@ -53,7 +80,7 @@ export function RunNowButton() {
         setBusy(false);
         return;
       }
-      setMessage("Started. Store mapping and scrape can take a minute. Shelf fills when the run finishes.");
+      setMessage("Started. Scrape can take a minute per location. Shelf fills when the run finishes.");
       setWatch(true);
     } catch (err) {
       setFailed(true);
