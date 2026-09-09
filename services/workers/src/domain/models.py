@@ -19,10 +19,18 @@ class CoveragePin(BaseModel):
     pincode: str
     city: str | None = None
     locality: str | None = None
+    store_name: str | None = None
     lat: float
     lon: float
     tier: str = "hot"
     platform: str = "blinkit"
+    active: bool = True
+
+
+class Keyword(BaseModel):
+    id: UUID
+    brand_id: UUID
+    query: str
     active: bool = True
 
 
@@ -71,6 +79,7 @@ class ParsedListing(BaseModel):
     product_url: str | None = None
     offer_text: str | None = None
     discount_text: str | None = None
+    discount_percent: float | None = None
     delivery_promise_min: int | None = None
     delivery_time_text: str | None = None
     category_path: list[str] = Field(default_factory=list)
@@ -98,6 +107,7 @@ class ObservationDraft(BaseModel):
     brand_name: str | None = None
     pack_raw: str | None = None
     pack_ml: int | None = None
+    pack_g: int | None = None
     category_path: list[str] = Field(default_factory=list)
     product_url: str | None = None
     image_url: str | None = None
@@ -125,6 +135,7 @@ class ObservationDraft(BaseModel):
     match_confidence: float | None = None
     match_method: str | None = None
     unit_price_per_l: float | None = None
+    unit_price_per_kg: float | None = None
     unlocker_vendor: str | None = None
     observed_at: datetime
     observed_slot: datetime
@@ -141,11 +152,16 @@ class DispatchPlan(BaseModel):
 
 class ScrapeJob(BaseModel):
     brand_ids: list[UUID] = Field(default_factory=list)
+    brand_id: UUID | None = None
     merchant_id: str
     platform: str
     run_id: UUID
     correlation_id: str
     observed_slot: datetime
+    queries: list[str] = Field(default_factory=list)
+    pincode: str = ""
+    lat: float | None = None
+    lon: float | None = None
 
 
 class DeriveJob(BaseModel):
@@ -168,3 +184,6 @@ class DispatchPayload(BaseModel):
     slot_kind: SlotKind = "morning"
     self_url: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+    brand_id: UUID | None = None
+    keyword_ids: list[UUID] = Field(default_factory=list)
+    pincode_ids: list[UUID] = Field(default_factory=list)

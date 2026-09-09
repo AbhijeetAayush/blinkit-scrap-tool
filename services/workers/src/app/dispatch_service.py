@@ -18,6 +18,9 @@ from src.domain.ports import (
     StoreMapRepo,
 )
 
+QUERIES_PER_JOB = 6
+CREDITS_PER_SEARCH = 5.0
+
 
 class DispatchService:
     def __init__(
@@ -48,96 +51,96 @@ class DispatchService:
         if payload.run_id and self._lock.is_halted(str(payload.run_id)) and self._settings.fail_fast:
             return {"status": "halted", "run_id": str(payload.run_id)}
 
+        brand_id = payload.brand_id
+        keyword_ids = list(payload.keyword_ids or [])
+        pincode_ids = list(payload.pincode_ids or [])
+        if not brand_id or not keyword_ids or not pincode_ids:
+            return {"status": "error", "error": "brand_id, keyword_ids, and pincode_ids are required"}
+
+        keywords = [
+            k
+            for k in self._coverage.list_keywords_by_ids(keyword_ids)
+            if k.brand_id == brand_id and k.active and k.query
+        ]
+        all_pins = [
+            p
+            for p in self._coverage.get_pins_by_ids(pincode_ids)
+            if p.brand_id == brand_id and p.active
+        ]
+        queries = list(dict.fromkeys(k.query.strip() for k in keywords if k.query.strip()))
+        if not queries or not all_pins:
+            return {"status": "error", "error": "no active keywords or locations for brand"}
+
+        pages = len(queries) * len(all_pins)
+        needed = pages * CREDITS_PER_SEARCH
         remaining = self._credits.remaining()
-        if remaining <= 0:
-            self._alerts.insert(None, "credit_budget", {"remaining": remaining})
-            return {"status": "budget", "remaining": remaining}
+        if remaining < needed:
+            self._alerts.insert(brand_id, "credit_budget", {"remaining": remaining, "needed": needed, "pages": pages})
+            return {"status": "budget", "remaining": remaining, "needed": needed, "pages": pages}
 
         run_id = payload.run_id or self._runs.create(
             kind="dispatch",
-            brand_id=None,
+            brand_id=brand_id,
             correlation_id=str(uuid.uuid4()),
             continuation_offset=payload.continuation_offset,
         )
         slot = payload.observed_slot or observed_slot(now_utc(), payload.slot_kind)
 
-        pins = self._coverage.list_active_pins(
-            offset=payload.continuation_offset,
-            limit=self._settings.pin_page_size,
-        )
-        missing = self._store_map.missing_pins(pins)
-        if missing and self._resolve is not None:
-            try:
-                self._resolve.run([str(p.id) for p in missing])
-            except Exception:
-                # Location unlocker flakiness must not block scrape publish.
-                pass
-        else:
-            for batch in _chunks(missing, 20):
-                self._publisher.publish_resolve({"pincode_ids": [str(p.id) for p in batch]})
-
-        stores: dict[tuple[str, str], StoreRef] = {}
-        brand_ids_by_store: dict[tuple[str, str], set] = {}
-        for pin in pins:
-            mapped = self._store_map.get(pin.platform, pin.pincode)
-            if mapped is None or not mapped.serviceable:
-                continue
-            key = (mapped.platform, mapped.merchant_id)
-            stores[key] = mapped
-            brand_ids_by_store.setdefault(key, set()).add(pin.brand_id)
-
+        offset = payload.continuation_offset
+        loc_page = all_pins[offset : offset + self._settings.max_stores_per_dispatch]
         published = 0
-        continued = False
-        for (platform, merchant_id), store in stores.items():
-            if published >= self._settings.max_stores_per_dispatch:
-                self._publisher.publish_dispatch_continuation(
-                    offset=payload.continuation_offset + len(pins),
+        job_count = 0
+        for pin in loc_page:
+            merchant_id = f"geo:{pin.lat:.4f},{pin.lon:.4f}"
+            for chunk in _chunks(queries, QUERIES_PER_JOB):
+                job = ScrapeJob(
+                    brand_ids=[brand_id],
+                    brand_id=brand_id,
+                    merchant_id=merchant_id,
+                    platform=pin.platform or "blinkit",
                     run_id=run_id,
+                    correlation_id=str(uuid.uuid4()),
                     observed_slot=slot,
-                    slot_kind=payload.slot_kind,
-                    self_url=payload.self_url or self._settings.dispatch_function_url,
+                    queries=chunk,
+                    pincode=pin.pincode,
+                    lat=pin.lat,
+                    lon=pin.lon,
                 )
-                continued = True
-                break
-            lock_key = f"lock:scrape:{platform}:{merchant_id}"
-            if not self._lock.acquire(lock_key, 600):
-                continue
-            job = ScrapeJob(
-                brand_ids=list(brand_ids_by_store.get((platform, merchant_id), [])),
-                merchant_id=merchant_id,
-                platform=platform,
-                run_id=run_id,
-                correlation_id=str(uuid.uuid4()),
-                observed_slot=slot,
-            )
-            delay = published * self._settings.scrape_spread_seconds
-            self._publisher.publish_scrape(job, delay)
+                delay = job_count * self._settings.scrape_spread_seconds
+                self._publisher.publish_scrape(job, delay)
+                job_count += 1
             published += 1
 
-        more = len(pins) == self._settings.pin_page_size
-        if more and published < self._settings.max_stores_per_dispatch:
+        continued = False
+        next_offset = offset + len(loc_page)
+        if next_offset < len(all_pins):
             self._publisher.publish_dispatch_continuation(
-                offset=payload.continuation_offset + len(pins),
+                offset=next_offset,
                 run_id=run_id,
                 observed_slot=slot,
                 slot_kind=payload.slot_kind,
                 self_url=payload.self_url or self._settings.dispatch_function_url,
+                brand_id=brand_id,
+                keyword_ids=keyword_ids,
+                pincode_ids=pincode_ids,
             )
             continued = True
 
         if not continued:
-            self._runs.finish(run_id, status="dispatched", pages_ok=published)
+            self._runs.finish(run_id, status="dispatched", pages_ok=job_count)
 
         return {
             "status": "ok",
             "run_id": str(run_id),
-            "pins": len(pins),
-            "published": published,
+            "pins": len(loc_page),
+            "published": job_count,
+            "locations": published,
+            "queries": len(queries),
             "observed_slot": slot.isoformat(),
         }
 
 
-def _chunks(items: list[CoveragePin], size: int) -> list[list[CoveragePin]]:
+def _chunks(items: list, size: int) -> list[list]:
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 

@@ -8,6 +8,7 @@ from src.domain.models import (
     CoveragePin,
     DeriveJob,
     FetchResult,
+    Keyword,
     ObservationDraft,
     ParsedListing,
     ScrapeJob,
@@ -61,6 +62,8 @@ class CoverageRepo(Protocol):
     def list_active_skus(self, brand_id: UUID) -> list[Sku]: ...
 
     def get_pins_by_ids(self, pincode_ids: list[UUID]) -> list[CoveragePin]: ...
+
+    def list_keywords_by_ids(self, keyword_ids: list[UUID]) -> list[Keyword]: ...
 
     def brand_ids_for_merchant(self, platform: str, merchant_id: str) -> list[UUID]: ...
 
@@ -174,6 +177,10 @@ class JobPublisher(Protocol):
         observed_slot: datetime,
         slot_kind: str,
         self_url: str,
+        *,
+        brand_id: UUID | None = None,
+        keyword_ids: list[UUID] | None = None,
+        pincode_ids: list[UUID] | None = None,
     ) -> None: ...
 
 

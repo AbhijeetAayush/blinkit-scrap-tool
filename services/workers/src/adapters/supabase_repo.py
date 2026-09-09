@@ -9,7 +9,7 @@ from src.app.clock import now_utc
 from supabase import Client, create_client
 
 from src.app.settings import Settings
-from src.domain.models import CoveragePin, ObservationDraft, Sku, StoreRef
+from src.domain.models import CoveragePin, Keyword, ObservationDraft, Sku, StoreRef
 
 
 def _pin(row: dict[str, Any]) -> CoveragePin:
@@ -19,6 +19,7 @@ def _pin(row: dict[str, Any]) -> CoveragePin:
         pincode=row["pincode"],
         city=row.get("city"),
         locality=row.get("locality"),
+        store_name=row.get("store_name"),
         lat=float(row["lat"]),
         lon=float(row["lon"]),
         tier=row.get("tier") or "hot",
@@ -67,16 +68,28 @@ class SupabaseRepos:
         return [_pin(r) for r in (res.data or [])]
 
     def get_pins_by_ids(self, pincode_ids: list[UUID]) -> list[CoveragePin]:
-        if not pincode_ids:
-            return []
-        res = (
-            self._db()
-            .table("pincodes")
-            .select("*")
-            .in_("id", [str(i) for i in pincode_ids])
-            .execute()
-        )
-        return [_pin(r) for r in (res.data or [])]
+        rows: list[dict[str, Any]] = []
+        ids = [str(i) for i in pincode_ids]
+        for i in range(0, len(ids), 100):
+            res = self._db().table("pincodes").select("*").in_("id", ids[i : i + 100]).execute()
+            rows.extend(res.data or [])
+        return [_pin(r) for r in rows]
+
+    def list_keywords_by_ids(self, keyword_ids: list[UUID]) -> list[Keyword]:
+        rows: list[Keyword] = []
+        ids = [str(i) for i in keyword_ids]
+        for i in range(0, len(ids), 100):
+            res = self._db().table("keywords").select("*").in_("id", ids[i : i + 100]).execute()
+            for row in res.data or []:
+                rows.append(
+                    Keyword(
+                        id=UUID(str(row["id"])),
+                        brand_id=UUID(str(row["brand_id"])),
+                        query=str(row["query"]),
+                        active=bool(row.get("active", True)),
+                    )
+                )
+        return rows
 
     def list_active_skus(self, brand_id: UUID) -> list[Sku]:
         res = (
@@ -217,7 +230,7 @@ class SupabaseRepos:
         unique: dict[tuple, ObservationDraft] = {}
         for d in drafts:
             slot = d.observed_slot.isoformat() if d.observed_slot else ""
-            key = (d.platform, d.merchant_id, d.pincode, d.product_id, slot)
+            key = (d.platform, d.merchant_id, d.pincode, d.product_id, d.search_query or "", slot)
             unique[key] = d
         rows = []
         for d in unique.values():
@@ -229,7 +242,7 @@ class SupabaseRepos:
         for i in range(0, len(rows), 200):
             self._db().table("observations").upsert(
                 rows[i : i + 200],
-                on_conflict="platform,merchant_id,pincode,product_id,observed_slot",
+                on_conflict="platform,merchant_id,pincode,product_id,search_query,observed_slot",
             ).execute()
 
     def list_for_run(self, run_id: UUID) -> list[dict[str, Any]]:

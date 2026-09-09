@@ -79,18 +79,20 @@ class QStashPublisher:
             raise RuntimeError(f"qstash publish failed status={resp.status_code} body={resp.text[:300]}")
 
     def publish_scrape(self, job: ScrapeJob, delay_s: int) -> None:
-        self._post(
-            self._scrape_url or self._scrape_name,
-            {
-                "brand_ids": [str(b) for b in job.brand_ids],
-                "merchant_id": job.merchant_id,
-                "platform": job.platform,
-                "run_id": str(job.run_id),
-                "correlation_id": job.correlation_id,
-                "observed_slot": job.observed_slot.isoformat(),
-            },
-            delay_s,
-        )
+        payload: dict[str, Any] = {
+            "brand_ids": [str(b) for b in job.brand_ids],
+            "brand_id": str(job.brand_id) if job.brand_id else None,
+            "merchant_id": job.merchant_id,
+            "platform": job.platform,
+            "run_id": str(job.run_id),
+            "correlation_id": job.correlation_id,
+            "observed_slot": job.observed_slot.isoformat(),
+            "queries": list(job.queries or []),
+            "pincode": job.pincode,
+            "lat": job.lat,
+            "lon": job.lon,
+        }
+        self._post(self._scrape_url or self._scrape_name, payload, delay_s)
 
     def publish_derive(self, job: DeriveJob) -> None:
         self._post(self._derive_url or self._derive_name, {"run_id": str(job.run_id)})
@@ -105,15 +107,19 @@ class QStashPublisher:
         observed_slot: datetime,
         slot_kind: str,
         self_url: str,
+        *,
+        brand_id: UUID | None = None,
+        keyword_ids: list[UUID] | None = None,
+        pincode_ids: list[UUID] | None = None,
     ) -> None:
         dest = self_url or self._dispatch_url or self._dispatch_name
-        self._post(
-            dest,
-            {
-                "continuation_offset": offset,
-                "observed_slot": observed_slot.isoformat(),
-                "run_id": str(run_id),
-                "slot_kind": slot_kind,
-            },
-            delay_s=2,
-        )
+        body: dict[str, Any] = {
+            "continuation_offset": offset,
+            "observed_slot": observed_slot.isoformat(),
+            "run_id": str(run_id),
+            "slot_kind": slot_kind,
+            "brand_id": str(brand_id) if brand_id else None,
+            "keyword_ids": [str(i) for i in (keyword_ids or [])],
+            "pincode_ids": [str(i) for i in (pincode_ids or [])],
+        }
+        self._post(dest, body, delay_s=2)
