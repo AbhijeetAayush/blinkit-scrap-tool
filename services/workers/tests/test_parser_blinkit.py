@@ -27,10 +27,15 @@ def test_parser_rendered_role_button_cards():
     assert "100633" in by_id
     kohinoor = by_id["527868"]
     assert "Kohinoor" in kohinoor.sku_name
+    assert kohinoor.brand_name == "Kohinoor"
     assert kohinoor.selling_price == 502
     assert kohinoor.mrp == 700
+    assert kohinoor.discount_percent == 28
+    assert kohinoor.discount_text and "28" in kohinoor.discount_text
     assert kohinoor.pack_raw and "10" in kohinoor.pack_raw
     assert kohinoor.in_stock is True
+    india = by_id["100633"]
+    assert india.brand_name == "India Gate"
 
 
 def test_merchant_id_from_preloaded_state():

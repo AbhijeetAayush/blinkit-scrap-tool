@@ -2,7 +2,7 @@ from uuid import UUID, uuid4
 
 from src.app.dispatch_service import DispatchService
 from src.app.settings import Settings
-from src.domain.models import CoveragePin, DispatchPayload, StoreRef
+from src.domain.models import CoveragePin, DispatchPayload, Keyword
 
 
 def _settings(**overrides) -> Settings:
@@ -55,17 +55,23 @@ def _pin(i: int, brand_id) -> CoveragePin:
 
 
 class FakeCoverage:
-    def __init__(self, pins: list[CoveragePin]) -> None:
+    def __init__(self, pins: list[CoveragePin], keywords: list[Keyword] | None = None) -> None:
         self.pins = pins
+        self.keywords = keywords or []
 
     def list_active_pins(self, *, offset: int, limit: int) -> list[CoveragePin]:
         return self.pins[offset : offset + limit]
 
+    def get_pins_by_ids(self, pincode_ids: list[UUID]) -> list[CoveragePin]:
+        wanted = {str(i) for i in pincode_ids}
+        return [p for p in self.pins if str(p.id) in wanted]
+
+    def list_keywords_by_ids(self, keyword_ids: list[UUID]) -> list[Keyword]:
+        wanted = {str(i) for i in keyword_ids}
+        return [k for k in self.keywords if str(k.id) in wanted]
+
 
 class FakeStoreMap:
-    def get(self, platform: str, pincode: str) -> StoreRef:
-        return StoreRef(platform=platform, merchant_id=f"m-{pincode}", serviceable=True)
-
     def missing_pins(self, pins: list[CoveragePin]) -> list[CoveragePin]:
         return []
 
@@ -98,7 +104,7 @@ class FakePublisher:
     def publish_resolve(self, payload: dict) -> None:
         self.resolves.append(payload)
 
-    def publish_dispatch_continuation(self, offset, run_id, observed_slot, slot_kind, self_url) -> None:
+    def publish_dispatch_continuation(self, offset, run_id, observed_slot, slot_kind, self_url, **extra) -> None:
         self.continuations.append(
             {
                 "offset": offset,
@@ -106,6 +112,7 @@ class FakePublisher:
                 "observed_slot": observed_slot,
                 "slot_kind": slot_kind,
                 "self_url": self_url,
+                **extra,
             }
         )
 
@@ -117,10 +124,16 @@ class FakeLock:
     def acquire(self, _key: str, _ttl_s: int) -> bool:
         return True
 
+    def release(self, _key: str) -> None:
+        return None
+
 
 class FakeCredits:
+    def __init__(self, remaining: float = 10_000.0) -> None:
+        self._remaining = remaining
+
     def remaining(self) -> float:
-        return 100.0
+        return self._remaining
 
     def add(self, _n: float) -> None:
         return None
@@ -128,91 +141,88 @@ class FakeCredits:
 
 class FakePlatforms:
     def get(self, platform: str):
-        raise AssertionError(f"resolve should not run for mapped pins: {platform}")
+        raise AssertionError(f"resolve should not run: {platform}")
 
 
-def test_dispatch_paginates_two_pages_no_three_pin_cap():
-    brand_id = uuid4()
-    pins = [_pin(i, brand_id) for i in range(4)]
-    coverage = FakeCoverage(pins)
+def _svc(pins, keywords, **kwargs):
     publisher = FakePublisher()
     svc = DispatchService(
-        _settings(),
-        coverage,
+        _settings(**kwargs.pop("settings_overrides", {})),
+        FakeCoverage(pins, keywords),
         FakeStoreMap(),
         FakeRuns(),
         FakeAlerts(),
         publisher,
         FakeLock(),
-        FakeCredits(),
+        kwargs.pop("credits", FakeCredits()),
         FakePlatforms(),
     )
+    return svc, publisher
 
-    first = svc.run(DispatchPayload(continuation_offset=0, slot_kind="morning"))
-    assert first["pins"] == 2
-    assert first["published"] == 2
+
+def test_dispatch_selected_locations_and_keywords_only():
+    brand_id = uuid4()
+    pins = [_pin(i, brand_id) for i in range(2)]
+    kw = Keyword(id=uuid4(), brand_id=brand_id, query="mini mogra rice")
+    svc, publisher = _svc(pins, [kw])
+    result = svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[kw.id],
+            pincode_ids=[pins[0].id],
+        )
+    )
+    assert result["status"] == "ok"
+    assert result["published"] == 1
+    assert result["pins"] == 1
+    job = publisher.scrapes[0][0]
+    assert job.queries == ["mini mogra rice"]
+    assert job.pincode == pins[0].pincode
+    assert job.brand_id == brand_id
+    assert job.merchant_id.startswith("geo:")
+    assert publisher.continuations == []
+
+
+def test_dispatch_rejects_empty_selection():
+    svc, publisher = _svc([], [])
+    result = svc.run(DispatchPayload(slot_kind="manual"))
+    assert result["status"] == "error"
+    assert publisher.scrapes == []
+
+
+def test_dispatch_budget_rejects_large_selection():
+    brand_id = uuid4()
+    pins = [_pin(0, brand_id)]
+    kw = Keyword(id=uuid4(), brand_id=brand_id, query="rice")
+    svc, publisher = _svc(pins, [kw], credits=FakeCredits(remaining=1))
+    result = svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[kw.id],
+            pincode_ids=[pins[0].id],
+        )
+    )
+    assert result["status"] == "budget"
+    assert publisher.scrapes == []
+
+
+def test_dispatch_chunks_keywords_and_continues_locations():
+    brand_id = uuid4()
+    pins = [_pin(i, brand_id) for i in range(3)]
+    kws = [Keyword(id=uuid4(), brand_id=brand_id, query=f"q{i}") for i in range(7)]
+    svc, publisher = _svc(pins, kws, settings_overrides={"max_stores_per_dispatch": 2})
+    first = svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[k.id for k in kws],
+            pincode_ids=[p.id for p in pins],
+        )
+    )
+    assert first["locations"] == 2
+    assert first["published"] == 4
     assert len(publisher.continuations) == 1
     assert publisher.continuations[0]["offset"] == 2
-
-    second = svc.run(
-        DispatchPayload(
-            continuation_offset=2,
-            run_id=publisher.continuations[0]["run_id"],
-            observed_slot=publisher.continuations[0]["observed_slot"],
-            slot_kind="morning",
-        )
-    )
-    assert second["pins"] == 2
-    assert second["published"] == 2
-    assert len(publisher.scrapes) == 4
-    merchants = {job.merchant_id for job, _delay in publisher.scrapes}
-    assert merchants == {"m-000000", "m-000001", "m-000002", "m-000003"}
-
-
-class _StoreMapThenMapped:
-    def __init__(self) -> None:
-        self._stores: dict[tuple[str, str], StoreRef] = {}
-
-    def get(self, platform: str, pincode: str) -> StoreRef | None:
-        return self._stores.get((platform, pincode))
-
-    def missing_pins(self, pins: list[CoveragePin]) -> list[CoveragePin]:
-        return [p for p in pins if self.get(p.platform, p.pincode) is None]
-
-
-class _InlineResolve:
-    def __init__(self, store_map: _StoreMapThenMapped) -> None:
-        self.store_map = store_map
-        self.ids: list[str] = []
-
-    def run(self, pincode_ids: list[str]) -> dict:
-        self.ids = list(pincode_ids)
-        self.store_map._stores[("blinkit", "000000")] = StoreRef(
-            platform="blinkit", merchant_id="m-inline", serviceable=True
-        )
-        return {"resolved": len(pincode_ids)}
-
-
-def test_dispatch_resolves_missing_pins_inline_then_scrapes():
-    brand_id = uuid4()
-    pin = _pin(0, brand_id)
-    store_map = _StoreMapThenMapped()
-    resolve = _InlineResolve(store_map)
-    publisher = FakePublisher()
-    svc = DispatchService(
-        _settings(pin_page_size=10),
-        FakeCoverage([pin]),
-        store_map,
-        FakeRuns(),
-        FakeAlerts(),
-        publisher,
-        FakeLock(),
-        FakeCredits(),
-        FakePlatforms(),
-        resolve,
-    )
-    result = svc.run(DispatchPayload(continuation_offset=0, slot_kind="manual"))
-    assert resolve.ids == [str(pin.id)]
-    assert publisher.resolves == []
-    assert result["published"] == 1
-    assert publisher.scrapes[0][0].merchant_id == "m-inline"
+    assert publisher.continuations[0]["keyword_ids"] == [k.id for k in kws]
