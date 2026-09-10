@@ -63,8 +63,8 @@ class FakeCoverage:
         return self.pins[offset : offset + limit]
 
     def get_pins_by_ids(self, pincode_ids: list[UUID]) -> list[CoveragePin]:
-        wanted = {str(i) for i in pincode_ids}
-        return [p for p in self.pins if str(p.id) in wanted]
+        by_id = {p.id: p for p in self.pins}
+        return [by_id[i] for i in pincode_ids if i in by_id]
 
     def list_keywords_by_ids(self, keyword_ids: list[UUID]) -> list[Keyword]:
         wanted = {str(i) for i in keyword_ids}
@@ -77,11 +77,14 @@ class FakeStoreMap:
 
 
 class FakeRuns:
+    def __init__(self) -> None:
+        self.finished: list[dict] = []
+
     def create(self, **_kwargs) -> UUID:
         return UUID("11111111-1111-1111-1111-111111111111")
 
-    def finish(self, *_args, **_kwargs) -> None:
-        return None
+    def finish(self, run_id, **kwargs) -> None:
+        self.finished.append({"run_id": run_id, **kwargs})
 
 
 class FakeAlerts:
@@ -118,6 +121,9 @@ class FakePublisher:
 
 
 class FakeLock:
+    def __init__(self) -> None:
+        self.jobs_left: dict[str, int] = {}
+
     def is_halted(self, _run_id: str) -> bool:
         return False
 
@@ -126,6 +132,15 @@ class FakeLock:
 
     def release(self, _key: str) -> None:
         return None
+
+    def set_jobs_left(self, run_id: str, n: int) -> None:
+        self.jobs_left[run_id] = n
+
+    def decr_jobs_left(self, run_id: str) -> int | None:
+        if run_id not in self.jobs_left:
+            return None
+        self.jobs_left[run_id] -= 1
+        return self.jobs_left[run_id]
 
 
 class FakeCredits:
@@ -146,14 +161,16 @@ class FakePlatforms:
 
 def _svc(pins, keywords, **kwargs):
     publisher = FakePublisher()
+    lock = kwargs.pop("lock", FakeLock())
+    runs = kwargs.pop("runs", FakeRuns())
     svc = DispatchService(
         _settings(**kwargs.pop("settings_overrides", {})),
         FakeCoverage(pins, keywords),
         FakeStoreMap(),
-        FakeRuns(),
+        runs,
         FakeAlerts(),
         publisher,
-        FakeLock(),
+        lock,
         kwargs.pop("credits", FakeCredits()),
         FakePlatforms(),
     )
@@ -211,7 +228,7 @@ def test_dispatch_budget_rejects_large_selection():
 def test_dispatch_chunks_keywords_and_continues_locations():
     brand_id = uuid4()
     pins = [_pin(i, brand_id) for i in range(3)]
-    kws = [Keyword(id=uuid4(), brand_id=brand_id, query=f"q{i}") for i in range(7)]
+    kws = [Keyword(id=uuid4(), brand_id=brand_id, query=f"query {i}") for i in range(7)]
     svc, publisher = _svc(pins, kws, settings_overrides={"max_stores_per_dispatch": 2})
     first = svc.run(
         DispatchPayload(
@@ -226,3 +243,117 @@ def test_dispatch_chunks_keywords_and_continues_locations():
     assert len(publisher.continuations) == 1
     assert publisher.continuations[0]["offset"] == 2
     assert publisher.continuations[0]["keyword_ids"] == [k.id for k in kws]
+
+
+def test_dispatch_does_not_mark_dispatched():
+    brand_id = uuid4()
+    pins = [_pin(0, brand_id)]
+    kw = Keyword(id=uuid4(), brand_id=brand_id, query="rice")
+    runs = FakeRuns()
+    svc, publisher = _svc(pins, [kw], runs=runs)
+    result = svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[kw.id],
+            pincode_ids=[pins[0].id],
+        )
+    )
+    assert result["status"] == "ok"
+    assert publisher.scrapes
+    assert runs.finished == []
+
+
+def test_dispatch_sets_jobs_left_on_first_page():
+    brand_id = uuid4()
+    pins = [_pin(i, brand_id) for i in range(3)]
+    kw = Keyword(id=uuid4(), brand_id=brand_id, query="rice")
+    lock = FakeLock()
+    svc, _publisher = _svc(pins, [kw], lock=lock)
+    svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[kw.id],
+            pincode_ids=[p.id for p in pins],
+        )
+    )
+    assert lock.jobs_left["11111111-1111-1111-1111-111111111111"] == 3
+
+
+def test_continuation_budget_uses_remaining_locations_only():
+    brand_id = uuid4()
+    pins = [_pin(i, brand_id) for i in range(3)]
+    kw = Keyword(id=uuid4(), brand_id=brand_id, query="rice")
+    runs = FakeRuns()
+    svc, publisher = _svc(
+        pins,
+        [kw],
+        credits=FakeCredits(remaining=6),
+        settings_overrides={"max_stores_per_dispatch": 2},
+        runs=runs,
+    )
+    result = svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[kw.id],
+            pincode_ids=[p.id for p in pins],
+            continuation_offset=2,
+            run_id=UUID("11111111-1111-1111-1111-111111111111"),
+        )
+    )
+    assert result["status"] == "ok"
+    assert result["published"] == 1
+    assert runs.finished == []
+    assert publisher.scrapes
+
+
+def test_first_page_budget_uses_this_invocation_only():
+    brand_id = uuid4()
+    pins = [_pin(i, brand_id) for i in range(3)]
+    kw = Keyword(id=uuid4(), brand_id=brand_id, query="rice")
+    svc, publisher = _svc(
+        pins,
+        [kw],
+        credits=FakeCredits(remaining=12),
+        settings_overrides={"max_stores_per_dispatch": 2},
+    )
+    result = svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[kw.id],
+            pincode_ids=[p.id for p in pins],
+        )
+    )
+    assert result["status"] == "ok"
+    assert result["published"] == 2
+
+
+def test_order_pins_by_ids_preserves_request_order():
+    from src.adapters.supabase_repo import order_pins_by_ids
+
+    brand_id = uuid4()
+    pins = [_pin(i, brand_id) for i in range(3)]
+    ordered = order_pins_by_ids(pins, [pins[2].id, pins[0].id, pins[1].id])
+    assert [p.id for p in ordered] == [pins[2].id, pins[0].id, pins[1].id]
+
+
+def test_dispatch_normalizes_keyword_case():
+    brand_id = uuid4()
+    pins = [_pin(0, brand_id)]
+    kws = [
+        Keyword(id=uuid4(), brand_id=brand_id, query="Rice"),
+        Keyword(id=uuid4(), brand_id=brand_id, query="rice"),
+    ]
+    svc, publisher = _svc(pins, kws)
+    svc.run(
+        DispatchPayload(
+            slot_kind="manual",
+            brand_id=brand_id,
+            keyword_ids=[k.id for k in kws],
+            pincode_ids=[pins[0].id],
+        )
+    )
+    assert publisher.scrapes[0][0].queries == ["rice"]

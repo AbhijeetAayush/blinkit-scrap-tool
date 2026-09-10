@@ -60,6 +60,9 @@ class FakePublisher:
 
 
 class FakeLock:
+    def __init__(self) -> None:
+        self.jobs: dict[str, int] = {}
+
     def is_halted(self, _run_id: str) -> bool:
         return False
 
@@ -68,6 +71,15 @@ class FakeLock:
 
     def release(self, _key: str) -> None:
         return None
+
+    def set_jobs_left(self, run_id: str, n: int) -> None:
+        self.jobs[run_id] = n
+
+    def decr_jobs_left(self, run_id: str) -> int | None:
+        if run_id not in self.jobs:
+            return None
+        self.jobs[run_id] -= 1
+        return self.jobs[run_id]
 
 
 class FakeCredits:
@@ -79,12 +91,16 @@ class FakeCredits:
 
 
 class FakeLake:
-    def put_bronze(self, _key: str, _body: bytes) -> None:
-        return None
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+    def put_bronze(self, key: str, _body: bytes) -> None:
+        self.keys.append(key)
 
 
 class FakeCatalog:
     platform_id = "blinkit"
+    last_html = "<html>cards</html>"
 
     def search(self, _unlocker, _cookies, query, lat=None, lon=None):
         html = (
@@ -110,10 +126,27 @@ class FakeAlerts:
         return None
 
 
+def _job(brand_id, run_id=None):
+    return ScrapeJob(
+        brand_ids=[brand_id],
+        brand_id=brand_id,
+        merchant_id="geo:18.4478,73.8371",
+        platform="blinkit",
+        run_id=run_id or UUID("11111111-1111-1111-1111-111111111111"),
+        correlation_id="c1",
+        observed_slot=datetime.now(timezone.utc),
+        queries=["mini mogra rice"],
+        pincode="411046",
+        lat=18.4478,
+        lon=73.8371,
+    )
+
+
 def test_scrape_harvests_all_cards_one_pincode():
     brand_id = uuid4()
     obs = FakeObs()
     pub = FakePublisher()
+    lake = FakeLake()
     svc = ScrapeStoreService(
         _settings(),
         None,
@@ -123,24 +156,11 @@ def test_scrape_harvests_all_cards_one_pincode():
         pub,
         FakeLock(),
         FakeCredits(),
-        FakeLake(),
+        lake,
         FakePlatforms(),
         FakeRouter(),
     )
-    job = ScrapeJob(
-        brand_ids=[brand_id],
-        brand_id=brand_id,
-        merchant_id="geo:18.4478,73.8371",
-        platform="blinkit",
-        run_id=UUID("11111111-1111-1111-1111-111111111111"),
-        correlation_id="c1",
-        observed_slot=datetime.now(timezone.utc),
-        queries=["mini mogra rice"],
-        pincode="411046",
-        lat=18.4478,
-        lon=73.8371,
-    )
-    result = svc.run(job)
+    result = svc.run(_job(brand_id))
     assert result["rows"] == 3
     pins = {d.pincode for d in obs.rows}
     assert pins == {"411046"}
@@ -153,4 +173,82 @@ def test_scrape_harvests_all_cards_one_pincode():
     assert kohinoor.brand_name == "Kohinoor"
     assert kohinoor.discount_percent == 28
     assert kohinoor.unit_price_per_kg == 50.2
+    assert pub.derive
+    assert any(k.endswith(".html") for k in lake.keys)
+    assert any(k.endswith(".json") for k in lake.keys)
+
+
+def test_blocked_search_retries_bee_not_zenrows():
+    from src.domain.errors import UnlockerBlockedError
+
+    class BlockedCatalog:
+        platform_id = "blinkit"
+
+        def search(self, *_a, **_k):
+            raise UnlockerBlockedError("blocked")
+
+    class Platforms:
+        def get(self, _p):
+            return BlockedCatalog()
+
+    class Router:
+        def __init__(self) -> None:
+            self.failovers = 0
+            self.fresh = 0
+
+        def session_for_store(self, _s):
+            return object(), "scrapingbee"
+
+        def failover_session(self, _s):
+            self.failovers += 1
+            return object(), "zenrows"
+
+        def fresh_session(self, _s):
+            self.fresh += 1
+            return object(), "scrapingbee"
+
+    router = Router()
+    obs = FakeObs()
+    svc = ScrapeStoreService(
+        _settings(),
+        None,
+        None,
+        obs,
+        FakeAlerts(),
+        FakePublisher(),
+        FakeLock(),
+        FakeCredits(),
+        FakeLake(),
+        Platforms(),
+        router,
+    )
+    result = svc.run(_job(uuid4()))
+    assert result["pages_fail"] == 1
+    assert result["rows"] == 0
+    assert router.failovers == 0
+    assert router.fresh == 1
+    assert obs.rows == []
+
+
+def test_derive_only_on_last_job():
+    lock = FakeLock()
+    run_id = UUID("11111111-1111-1111-1111-111111111111")
+    lock.set_jobs_left(str(run_id), 2)
+    pub = FakePublisher()
+    svc = ScrapeStoreService(
+        _settings(),
+        None,
+        None,
+        FakeObs(),
+        FakeAlerts(),
+        pub,
+        lock,
+        FakeCredits(),
+        FakeLake(),
+        FakePlatforms(),
+        FakeRouter(),
+    )
+    svc.run(_job(uuid4(), run_id))
+    assert pub.derive == []
+    svc.run(_job(uuid4(), run_id))
     assert pub.derive

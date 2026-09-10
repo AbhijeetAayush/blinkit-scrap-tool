@@ -7,6 +7,7 @@ from src.app.clock import now_utc, observed_slot
 from src.app.settings import Settings
 from src.domain.errors import UnlockerBlockedError, UnserviceableError
 from src.domain.models import CoveragePin, DispatchPayload, ScrapeJob, StoreRef
+from src.normalize.keyword import normalize_keyword
 from src.domain.ports import (
     AlertRepo,
     CoverageRepo,
@@ -67,15 +68,23 @@ class DispatchService:
             for p in self._coverage.get_pins_by_ids(pincode_ids)
             if p.brand_id == brand_id and p.active
         ]
-        queries = list(dict.fromkeys(k.query.strip() for k in keywords if k.query.strip()))
+        queries = list(dict.fromkeys(q for k in keywords if (q := normalize_keyword(k.query))))
         if not queries or not all_pins:
             return {"status": "error", "error": "no active keywords or locations for brand"}
 
-        pages = len(queries) * len(all_pins)
+        offset = payload.continuation_offset
+        loc_page = all_pins[offset : offset + self._settings.max_stores_per_dispatch]
+        pages = len(queries) * len(loc_page)
         needed = pages * CREDITS_PER_SEARCH
         remaining = self._credits.remaining()
         if remaining < needed:
             self._alerts.insert(brand_id, "credit_budget", {"remaining": remaining, "needed": needed, "pages": pages})
+            if payload.run_id:
+                self._runs.finish(
+                    payload.run_id,
+                    status="budget",
+                    error="daily search budget",
+                )
             return {"status": "budget", "remaining": remaining, "needed": needed, "pages": pages}
 
         run_id = payload.run_id or self._runs.create(
@@ -85,9 +94,12 @@ class DispatchService:
             continuation_offset=payload.continuation_offset,
         )
         slot = payload.observed_slot or observed_slot(now_utc(), payload.slot_kind)
+        if offset == 0:
+            chunks_per = max(1, (len(queries) + QUERIES_PER_JOB - 1) // QUERIES_PER_JOB)
+            setter = getattr(self._lock, "set_jobs_left", None)
+            if callable(setter):
+                setter(str(run_id), chunks_per * len(all_pins))
 
-        offset = payload.continuation_offset
-        loc_page = all_pins[offset : offset + self._settings.max_stores_per_dispatch]
         published = 0
         job_count = 0
         for pin in loc_page:
@@ -111,7 +123,6 @@ class DispatchService:
                 job_count += 1
             published += 1
 
-        continued = False
         next_offset = offset + len(loc_page)
         if next_offset < len(all_pins):
             self._publisher.publish_dispatch_continuation(
@@ -124,10 +135,6 @@ class DispatchService:
                 keyword_ids=keyword_ids,
                 pincode_ids=pincode_ids,
             )
-            continued = True
-
-        if not continued:
-            self._runs.finish(run_id, status="dispatched", pages_ok=job_count)
 
         return {
             "status": "ok",

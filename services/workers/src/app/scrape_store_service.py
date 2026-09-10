@@ -84,98 +84,26 @@ class ScrapeStoreService:
         pages_fail = 0
 
         for query in queries:
-            listings = None
-            try:
-                listings = catalog.search(unlocker, None, query, lat=lat, lon=lon)
-            except ParseEmptyError as exc:
-                html = getattr(exc, "html", "") or ""
-                if html:
-                    bronze_key = (
-                        f"bronze/platform={job.platform}/dt={now.date().isoformat()}/"
-                        f"hour={now.hour:02d}/store={job.merchant_id}/{job.correlation_id}-empty.html"
-                    )
-                    self._lake.put_bronze(bronze_key, html.encode()[:1_500_000])
-                if "ProductSkeleton" in html:
-                    try:
-                        listings = catalog.search(unlocker, None, query, lat=lat, lon=lon)
-                    except ParseEmptyError as retry_exc:
-                        retry_html = getattr(retry_exc, "html", "") or ""
-                        if retry_html:
-                            bronze_key = (
-                                f"bronze/platform={job.platform}/dt={now.date().isoformat()}/"
-                                f"hour={now.hour:02d}/store={job.merchant_id}/"
-                                f"{job.correlation_id}-empty-retry.html"
-                            )
-                            self._lake.put_bronze(bronze_key, retry_html.encode()[:1_500_000])
-                        self._alerts.insert(
-                            tenant,
-                            "parse_empty",
-                            {
-                                "merchant_id": job.merchant_id,
-                                "query": query,
-                                "reason": "skeleton",
-                                "vendor": vendor,
-                            },
-                        )
-                        pages_fail += 1
-                        continue
-                    except UnlockerBlockedError:
-                        listings = None
-                else:
-                    self._alerts.insert(
-                        tenant,
-                        "parse_empty",
-                        {"merchant_id": job.merchant_id, "query": query, "vendor": vendor},
-                    )
-                    pages_fail += 1
-                    continue
-            except UnlockerBlockedError:
-                listings = None
-
+            listings, unlocker, vendor = self._search_html(catalog, unlocker, vendor, job, query, lat, lon, now, tenant)
             if listings is None:
-                if self._settings.unlocker_failover:
-                    unlocker, vendor = self._router.failover_session(job.merchant_id)
-                    try:
-                        listings = catalog.search(unlocker, None, query, lat=lat, lon=lon)
-                    except ParseEmptyError as exc:
-                        html = getattr(exc, "html", "") or ""
-                        if html:
-                            bronze_key = (
-                                f"bronze/platform={job.platform}/dt={now.date().isoformat()}/"
-                                f"hour={now.hour:02d}/store={job.merchant_id}/{job.correlation_id}-empty.html"
-                            )
-                            self._lake.put_bronze(bronze_key, html.encode()[:1_500_000])
-                        self._alerts.insert(
-                            tenant,
-                            "parse_empty",
-                            {"merchant_id": job.merchant_id, "query": query, "vendor": vendor},
-                        )
-                        pages_fail += 1
-                        continue
-                    except Exception:
-                        self._alerts.insert(
-                            tenant,
-                            "unlocker_fail",
-                            {"merchant_id": job.merchant_id, "query": query, "vendor": vendor},
-                        )
-                        pages_fail += 1
-                        continue
-                else:
-                    self._alerts.insert(
-                        tenant,
-                        "unlocker_fail",
-                        {"merchant_id": job.merchant_id, "query": query, "vendor": vendor},
-                    )
-                    pages_fail += 1
-                    continue
+                pages_fail += 1
+                continue
 
+            html = getattr(catalog, "last_html", None) or getattr(unlocker, "last_html", "") or ""
+            digest = hashlib.sha1(query.encode()).hexdigest()[:10]
+            if html:
+                html_key = (
+                    f"bronze/platform={job.platform}/dt={now.date().isoformat()}/"
+                    f"hour={now.hour:02d}/store={job.merchant_id}/{job.correlation_id}-{digest}.html"
+                )
+                self._lake.put_bronze(html_key, html.encode()[:1_500_000])
             raw = json.dumps([lst.model_dump(mode="json") for lst in listings]).encode()
             if len(raw) > 1_500_000:
                 raw = raw[:1_500_000]
             bronze_key = (
                 f"bronze/platform={job.platform}/dt={now.date().isoformat()}/"
                 f"hour={now.hour:02d}/store={job.merchant_id}/"
-                f"{job.correlation_id}-{hashlib.sha1(query.encode()).hexdigest()[:10]}.json"
+                f"{job.correlation_id}-{digest}.json"
             )
             self._lake.put_bronze(bronze_key, raw)
             hint = getattr(unlocker, "last_credits_hint", None)
@@ -235,10 +163,54 @@ class ScrapeStoreService:
                 )
 
         self._observations.upsert_many(drafts)
-        self._publisher.publish_derive(DeriveJob(run_id=job.run_id))
+        left = None
+        decr = getattr(self._lock, "decr_jobs_left", None)
+        if callable(decr):
+            left = decr(str(job.run_id))
+        if left is None or left <= 0:
+            self._publisher.publish_derive(DeriveJob(run_id=job.run_id))
         return {
             "status": "ok",
             "rows": len(drafts),
             "queries": len(queries),
             "pages_fail": pages_fail,
         }
+
+    def _put_html_bronze(self, job: ScrapeJob, now: datetime, html: str, suffix: str) -> None:
+        if not html:
+            return
+        bronze_key = (
+            f"bronze/platform={job.platform}/dt={now.date().isoformat()}/"
+            f"hour={now.hour:02d}/store={job.merchant_id}/{job.correlation_id}-{suffix}.html"
+        )
+        self._lake.put_bronze(bronze_key, html.encode()[:1_500_000])
+
+    def _attempt_search(self, catalog, unlocker, query: str, lat, lon, job: ScrapeJob, now: datetime, suffix: str):
+        try:
+            listings = catalog.search(unlocker, None, query, lat=lat, lon=lon)
+            return listings, None
+        except ParseEmptyError as exc:
+            html = getattr(exc, "html", "") or ""
+            self._put_html_bronze(job, now, html, suffix)
+            return None, "empty"
+        except UnlockerBlockedError:
+            return None, "blocked"
+
+    def _search_html(self, catalog, unlocker, vendor, job: ScrapeJob, query: str, lat, lon, now, tenant):
+        listings, err = self._attempt_search(catalog, unlocker, query, lat, lon, job, now, "empty")
+        if listings is None and err == "empty":
+            listings, err = self._attempt_search(catalog, unlocker, query, lat, lon, job, now, "empty-retry")
+        if listings is None and err == "blocked":
+            fresh = getattr(self._router, "fresh_session", None)
+            if callable(fresh):
+                unlocker, vendor = fresh(job.merchant_id)
+                listings, err = self._attempt_search(catalog, unlocker, query, lat, lon, job, now, "empty-fresh")
+        if listings is None:
+            alert_type = "parse_empty" if err == "empty" else "unlocker_fail"
+            self._alerts.insert(
+                tenant,
+                alert_type,
+                {"merchant_id": job.merchant_id, "query": query, "vendor": vendor},
+            )
+            return None, unlocker, vendor
+        return listings, unlocker, vendor

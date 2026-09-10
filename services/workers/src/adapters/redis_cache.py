@@ -76,3 +76,16 @@ class RedisCache:
             if raw is not None:
                 used = float(raw)
         return float(self._budget) - used
+
+    def set_jobs_left(self, run_id: str, n: int) -> None:
+        self._cmd("SET", f"run:{run_id}:jobs_left", str(n), "EX", "7200")
+
+    def decr_jobs_left(self, run_id: str) -> int | None:
+        resp = self._cmd("DECR", f"run:{run_id}:jobs_left")
+        if resp is None:
+            return None
+        raw = resp.json().get("result")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None

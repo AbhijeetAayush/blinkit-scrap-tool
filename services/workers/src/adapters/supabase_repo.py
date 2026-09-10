@@ -12,6 +12,12 @@ from src.app.settings import Settings
 from src.domain.models import CoveragePin, Keyword, ObservationDraft, Sku, StoreRef
 
 
+def order_pins_by_ids(pins: list[CoveragePin], pincode_ids: list[UUID]) -> list[CoveragePin]:
+    """PostgREST .in_() does not preserve request order. Continuation offset needs a stable list."""
+    by_id = {p.id: p for p in pins}
+    return [by_id[i] for i in pincode_ids if i in by_id]
+
+
 def _pin(row: dict[str, Any]) -> CoveragePin:
     return CoveragePin(
         id=UUID(str(row["id"])),
@@ -73,7 +79,7 @@ class SupabaseRepos:
         for i in range(0, len(ids), 100):
             res = self._db().table("pincodes").select("*").in_("id", ids[i : i + 100]).execute()
             rows.extend(res.data or [])
-        return [_pin(r) for r in rows]
+        return order_pins_by_ids([_pin(r) for r in rows], pincode_ids)
 
     def list_keywords_by_ids(self, keyword_ids: list[UUID]) -> list[Keyword]:
         rows: list[Keyword] = []

@@ -24,6 +24,7 @@ def _location_cookies(lat: float | None, lon: float | None, extra: str | None) -
 
 class BlinkitCatalog:
     platform_id = "blinkit"
+    last_html = ""
 
     def resolve_store(self, lat: float, lon: float, unlocker: Unlocker) -> StoreRef:
         url = f"{constants.HOME_URL}?lat={lat}&lon={lon}"
@@ -63,6 +64,8 @@ class BlinkitCatalog:
             extra_headers=_location_headers(lat, lon),
         )
         try:
-            return parse_search_html(result.html, query=query)
+            listings = parse_search_html(result.html, query=query)
         except ParseEmptyError as exc:
             raise ParseEmptyError(str(exc), html=result.html) from exc
+        self.last_html = result.html
+        return listings

@@ -38,6 +38,8 @@ class UnlockerRouter(Protocol):
 
     def failover_session(self, store_id: str) -> tuple[Unlocker, str]: ...
 
+    def fresh_session(self, store_id: str) -> tuple[Unlocker, str]: ...
+
 
 class PlatformCatalog(Protocol):
     platform_id: str
@@ -194,6 +196,10 @@ class Lock(Protocol):
     def is_halted(self, run_id: str) -> bool: ...
 
     def cache_store(self, platform: str, pincode: str, payload: str, ttl_s: int = 86400) -> None: ...
+
+    def set_jobs_left(self, run_id: str, n: int) -> None: ...
+
+    def decr_jobs_left(self, run_id: str) -> int | None: ...
 
 
 class CreditMeter(Protocol):
