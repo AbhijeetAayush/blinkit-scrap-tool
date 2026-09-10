@@ -187,7 +187,8 @@ class ScrapeStoreService:
 
     def _attempt_search(self, catalog, unlocker, query: str, lat, lon, job: ScrapeJob, now: datetime, suffix: str):
         try:
-            listings = catalog.search(unlocker, None, query, lat=lat, lon=lon)
+            cookies = getattr(unlocker, "session_cookies", None)
+            listings = catalog.search(unlocker, cookies, query, lat=lat, lon=lon)
             return listings, None
         except ParseEmptyError as exc:
             html = getattr(exc, "html", "") or ""
