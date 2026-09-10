@@ -252,3 +252,46 @@ def test_derive_only_on_last_job():
     assert pub.derive == []
     svc.run(_job(uuid4(), run_id))
     assert pub.derive
+
+
+def test_scrape_passes_session_cookies_to_catalog():
+    seen: list[str | None] = []
+
+    class TrackingCatalog:
+        platform_id = "blinkit"
+        last_html = "<html></html>"
+
+        def search(self, _unlocker, cookies, query, lat=None, lon=None):
+            seen.append(cookies)
+            return parse_search_html(
+                '<div role="button" id="1">Rice ₹10 ₹12 ADD</div>',
+                query=query,
+            )
+
+    class Platforms:
+        def get(self, _p):
+            return TrackingCatalog()
+
+    class SessionUnlocker:
+        vendor = "scrapingbee"
+        session_cookies = "session=warmed; tok=abc"
+
+    class Router:
+        def session_for_store(self, _s):
+            return SessionUnlocker(), "scrapingbee"
+
+    svc = ScrapeStoreService(
+        _settings(),
+        None,
+        None,
+        FakeObs(),
+        FakeAlerts(),
+        FakePublisher(),
+        FakeLock(),
+        FakeCredits(),
+        FakeLake(),
+        Platforms(),
+        Router(),
+    )
+    svc.run(_job(uuid4()))
+    assert seen == ["session=warmed; tok=abc"]
