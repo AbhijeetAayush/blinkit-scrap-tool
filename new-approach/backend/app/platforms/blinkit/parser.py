@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import re
+from typing import Any
 from urllib.parse import quote
 
 from selectolax.parser import HTMLParser
@@ -12,8 +14,14 @@ _PRICE = re.compile(r"(?:₹|Rs\.?)\s*(\d+(?:\.\d+)?)")
 _PACK = re.compile(r"(\d+(?:\.\d+)?\s?(?:kg|g|ml|l|pcs|pc|pack))\b", re.I)
 _ETA = re.compile(r"(\d+)\s*mins?", re.I)
 _OFF = re.compile(r"(\d+)\s*%\s*OFF", re.I)
-_RATING = re.compile(r"\b([1-5](?:\.\d)?)\s*\(([\d.,]+\s*[kKmM]?)\)")
+_RATING = re.compile(
+    r"\b([1-5](?:\.\d)?)\s*(?:★|⭐)?\s*[\(\[]?\s*([\d.,]+\s*[kKmM]?)\s*[\)\]]?",
+)
 _COUNT_K = re.compile(r"^([\d.]+)\s*([kKmM])?$")
+_JSON_LD = re.compile(
+    r'<script[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+    re.I | re.S,
+)
 _CDN = "cdn.grofers.com"
 
 _KNOWN_BRANDS = tuple(
@@ -131,6 +139,251 @@ def _card_image_url(card) -> str | None:
     return ranked[0][1]
 
 
+def _object_after(html: str, marker: str) -> dict | None:
+    idx = html.find(marker)
+    if idx < 0:
+        return None
+    start = html.find("{", idx)
+    if start < 0:
+        return None
+    try:
+        obj, _n = json.JSONDecoder().raw_decode(html[start:])
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _rating_fields(raw: dict) -> tuple[float | None, int | None]:
+    rating = raw.get("rating")
+    count = (
+        raw.get("rating_count")
+        or raw.get("ratingCount")
+        or raw.get("number_of_ratings")
+        or raw.get("ratings_count")
+    )
+    if isinstance(rating, dict):
+        count = (
+            count
+            if count is not None
+            else (
+                rating.get("count")
+                or rating.get("rating_count")
+                or rating.get("count_text")
+                or rating.get("countText")
+            )
+        )
+        rating = rating.get("value") or rating.get("average") or rating.get("avg") or rating.get("rating")
+    rating_v2 = raw.get("rating_v2") or raw.get("ratingV2")
+    if isinstance(rating_v2, dict):
+        if rating is None:
+            rating = rating_v2.get("value") or rating_v2.get("rating")
+        if count is None:
+            count = rating_v2.get("count") or rating_v2.get("count_text")
+    parsed_rating = None
+    if rating is not None and not isinstance(rating, dict):
+        try:
+            parsed_rating = float(str(rating).strip())
+        except ValueError:
+            parsed_rating = None
+    parsed_count = None
+    if isinstance(count, bool):
+        parsed_count = None
+    elif isinstance(count, int):
+        parsed_count = count
+    elif isinstance(count, float):
+        parsed_count = int(round(count))
+    elif isinstance(count, str):
+        parsed_count = _parse_count(count)
+    return parsed_rating, parsed_count
+
+
+def _category_path(raw: dict) -> list[str]:
+    junk = {"", "-", "na", "n/a", "#-na", "null", "none", "undefined"}
+    path: list[str] = []
+
+    def _push(val: Any) -> None:
+        if isinstance(val, dict):
+            val = val.get("name") or val.get("title") or val.get("text")
+        if not isinstance(val, str):
+            return
+        text = val.strip()
+        if not text or text.lower() in junk or text in path:
+            return
+        path.append(text)
+
+    for key in (
+        "l0_category",
+        "l1_category",
+        "l2_category",
+        "sub_category",
+        "category",
+        "primary_category",
+        "secondary_category",
+        "category_name",
+        "type",
+        "product_type",
+    ):
+        _push(raw.get(key))
+    nested = raw.get("categories") or raw.get("category_path")
+    if isinstance(nested, list):
+        for item in nested:
+            _push(item)
+    return path
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _walk_products(obj: Any, acc: list[dict]) -> None:
+    if isinstance(obj, dict):
+        if "product_id" in obj or "productId" in obj or (
+            "name" in obj and ("price" in obj or "mrp" in obj or "selling_price" in obj)
+        ):
+            acc.append(obj)
+        data = obj.get("data")
+        if isinstance(data, dict) and (
+            "product_id" in data or "productId" in data or ("name" in data and ("price" in data or "mrp" in data))
+        ):
+            acc.append(data)
+        for value in obj.values():
+            _walk_products(value, acc)
+    elif isinstance(obj, list):
+        for item in obj:
+            _walk_products(item, acc)
+
+
+def _as_str(value: Any) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def listing_from_dict(raw: dict, position: int, query: str) -> Listing | None:
+    product_id = str(raw.get("product_id") or raw.get("productId") or "")
+    name = raw.get("name") or raw.get("title") or raw.get("sku_name")
+    if isinstance(name, dict):
+        name = name.get("text") or name.get("value")
+    if not name:
+        name = raw.get("display_name") or raw.get("product_name")
+    rating, rating_count = _rating_fields(raw)
+    if not product_id:
+        return None
+    if not isinstance(name, str) or not name:
+        if rating is None and rating_count is None:
+            return None
+        name = f"product {product_id}"
+    price = raw.get("price") or raw.get("selling_price") or raw.get("offer_price")
+    mrp = raw.get("mrp")
+    in_stock = raw.get("in_stock")
+    if in_stock is None:
+        in_stock = not bool(raw.get("out_of_stock") or raw.get("is_sold_out"))
+    discount_raw = raw.get("discount") or raw.get("discount_text") or raw.get("offer_text")
+    discount_text = _as_str(discount_raw)
+    off = None
+    if discount_text:
+        off_m = _OFF.search(discount_text)
+        if off_m:
+            off = float(off_m.group(1))
+    if off is None and isinstance(raw.get("discount_percent"), (int, float)):
+        off = float(raw["discount_percent"])
+    brand = raw.get("brand") or raw.get("brand_name")
+    if isinstance(brand, dict):
+        brand = brand.get("name") or brand.get("title")
+    brand_s = _as_str(brand)
+    inventory = raw.get("inventory") or raw.get("inventory_shown")
+    if isinstance(inventory, dict):
+        inventory = inventory.get("count") or inventory.get("value")
+    qty = raw.get("max_qty") if raw.get("max_qty") is not None else raw.get("max_allowed_quantity")
+    images = raw.get("images") or raw.get("image_list") or []
+    image_url = raw.get("image_url")
+    if not image_url and isinstance(images, list) and images:
+        first = images[0]
+        image_url = first if isinstance(first, str) else (first.get("url") if isinstance(first, dict) else None)
+    eta = raw.get("eta_minutes")
+    delivery_time = raw.get("delivery_time") or raw.get("eta_text")
+    if delivery_time is None and eta is not None:
+        delivery_time = f"{eta} mins"
+    pack_raw = _as_str(raw.get("unit") or raw.get("quantity") or raw.get("pack"))
+    product_url = _as_str(raw.get("product_url") or raw.get("deeplink")) or f"https://blinkit.com/prn/prid/{product_id}"
+    try:
+        return Listing(
+            product_id=product_id,
+            variant_id=str(raw.get("variant_id") or raw.get("variantId") or product_id),
+            group_id=_as_str(raw.get("group_id")),
+            sku_name=str(name),
+            brand_name=brand_s or infer_brand_name(str(name)),
+            pack_raw=pack_raw,
+            mrp=_to_float(mrp),
+            selling_price=_to_float(price),
+            in_stock=bool(in_stock),
+            inventory_shown=int(inventory) if inventory is not None and not isinstance(inventory, dict) else None,
+            qty_cap=int(qty) if qty is not None and not isinstance(qty, dict) else None,
+            is_sponsored=raw.get("is_ad") if raw.get("is_ad") is not None else raw.get("is_sponsored"),
+            shelf_position=int(raw.get("position") or position),
+            organic_rank=int(raw["organic_rank"]) if raw.get("organic_rank") is not None else None,
+            rating=rating,
+            rating_count=rating_count,
+            image_url=image_url if isinstance(image_url, str) else None,
+            product_url=product_url,
+            offer_text=_as_str(raw.get("offer_text")) or discount_text,
+            discount_text=discount_text,
+            discount_percent=off,
+            delivery_promise_min=int(eta) if eta is not None else None,
+            delivery_time_text=_as_str(delivery_time),
+            category_path=_category_path(raw),
+            search_query=query,
+            result_page=1,
+        )
+    except Exception:
+        return None
+
+
+def merge_listing(base: Listing, extra: Listing) -> Listing:
+    data = base.model_dump()
+    for key, value in extra.model_dump().items():
+        cur = data.get(key)
+        if key == "category_path" and isinstance(cur, list) and isinstance(value, list):
+            merged = list(cur)
+            for item in value:
+                if item not in merged:
+                    merged.append(item)
+            data[key] = merged
+            continue
+        if cur in (None, "", [], False) and value not in (None, "", [], False):
+            data[key] = value
+        elif key in {
+            "brand_name",
+            "discount_text",
+            "discount_percent",
+            "rating",
+            "rating_count",
+            "image_url",
+            "product_url",
+            "is_sponsored",
+            "pack_raw",
+            "inventory_shown",
+            "qty_cap",
+            "group_id",
+            "offer_text",
+            "delivery_promise_min",
+            "delivery_time_text",
+        }:
+            if cur in (None, "", []) and value not in (None, "", []):
+                data[key] = value
+    return Listing(**data)
+
+
 def _listing_from_card(
     card,
     *,
@@ -171,6 +424,7 @@ def _listing_from_card(
     name = _RATING.sub("", name)
     name = re.sub(r"\bADD\b", "", name, flags=re.I)
     name = re.sub(r"\bAD\b", "", name, flags=re.I)
+    name = re.sub(r"[★⭐]", "", name)
     if pack:
         name = re.sub(re.escape(pack), "", name, count=1, flags=re.I)
     name = " ".join(name.split()).strip(" -")
@@ -209,29 +463,96 @@ def _listing_from_card(
     )
 
 
-def parse_search_html(html: str, query: str = "") -> list[Listing]:
+def listings_from_payloads(payloads: list[Any], query: str = "") -> list[Listing]:
     seen: dict[str, Listing] = {}
+    for payload in payloads:
+        blob: list[dict] = []
+        _walk_products(payload, blob)
+        for raw in blob:
+            item = listing_from_dict(raw, len(seen) + 1, query)
+            if not item:
+                continue
+            existing = seen.get(item.product_id)
+            if existing:
+                seen[item.product_id] = merge_listing(existing, item)
+            else:
+                seen[item.product_id] = item
+    return list(seen.values())
+
+
+def parse_search_html(
+    html: str,
+    query: str = "",
+    *,
+    json_payloads: list[Any] | None = None,
+) -> list[Listing]:
+    seen: dict[str, Listing] = {}
+
+    def _add(item: Listing | None) -> None:
+        if not item:
+            return
+        existing = seen.get(item.product_id)
+        if existing:
+            seen[item.product_id] = merge_listing(existing, item)
+            return
+        seen[item.product_id] = item
+
+    for match in _JSON_LD.finditer(html):
+        try:
+            data = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        blob: list[dict] = []
+        _walk_products(data, blob)
+        for raw in blob:
+            _add(listing_from_dict(raw, len(seen) + 1, query))
+
+    for marker in ("window.grofers.PRELOADED_STATE", "window.__PRELOADED_STATE__"):
+        state = _object_after(html, marker)
+        if not state:
+            continue
+        blob = []
+        _walk_products(state, blob)
+        for raw in blob:
+            _add(listing_from_dict(raw, len(seen) + 1, query))
+
+    for item in listings_from_payloads(json_payloads or [], query=query):
+        _add(item)
+
     tree = HTMLParser(html)
     shelf_pos = 0
     organic_pos = 0
     for card in tree.css("div[role='button'][id]"):
-        item = _listing_from_card(
+        provisional = _listing_from_card(
             card,
             shelf_position=0,
             organic_rank=None,
             query=query,
         )
-        if not item or item.product_id in seen:
+        if not provisional:
             continue
-        shelf_pos += 1
-        item.shelf_position = shelf_pos
-        if item.is_sponsored:
-            item.organic_rank = None
+        # always merge HTML for price/rank; create if new
+        if provisional.product_id not in seen:
+            shelf_pos += 1
+            provisional.shelf_position = shelf_pos
+            if provisional.is_sponsored:
+                provisional.organic_rank = None
+            else:
+                organic_pos += 1
+                provisional.organic_rank = organic_pos
+            seen[provisional.product_id] = provisional
         else:
-            organic_pos += 1
-            item.organic_rank = organic_pos
-        seen[item.product_id] = item
+            shelf_pos += 1
+            provisional.shelf_position = shelf_pos
+            if provisional.is_sponsored:
+                provisional.organic_rank = None
+            else:
+                organic_pos += 1
+                provisional.organic_rank = organic_pos
+            seen[provisional.product_id] = merge_listing(seen[provisional.product_id], provisional)
+
     listings = list(seen.values())
+    listings.sort(key=lambda x: (x.shelf_position is None, x.shelf_position or 10_000))
     if not listings:
         raise ParseEmptyError("blinkit search returned zero product cards", html=html)
     return listings

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.errors import ParseEmptyError
-from app.platforms.blinkit.parser import parse_search_html
+from app.platforms.blinkit.parser import listing_from_dict, parse_search_html
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "blinkit" / "rendered_cards.html"
 
@@ -38,3 +38,76 @@ def test_parse_rendered_cards_extracts_priced_listings() -> None:
 def test_parse_empty_html_raises() -> None:
     with pytest.raises(ParseEmptyError):
         parse_search_html("<html><body><p>no products</p></body></html>", query="x")
+
+
+def test_json_payload_fills_rating_and_category() -> None:
+    html = FIXTURE.read_text(encoding="utf-8")
+    payload = {
+        "response": {
+            "snippets": [
+                {
+                    "widget_type": "PRODUCT",
+                    "data": {
+                        "product_id": "527868",
+                        "name": "Kohinoor Mini Mogra 2 Rice",
+                        "rating": 4.2,
+                        "rating_count": "12.3k",
+                        "brand": "Kohinoor",
+                        "l0_category": "Grocery & Kitchen",
+                        "l1_category": "Atta, Rice & Dal",
+                        "sub_category": "Rice",
+                        "price": 502,
+                        "mrp": 700,
+                        "unit": "10 kg",
+                        "is_ad": False,
+                    },
+                }
+            ]
+        }
+    }
+    listings = parse_search_html(html, query="mini mogra rice", json_payloads=[payload])
+    kohinoor = {i.product_id: i for i in listings}["527868"]
+    assert kohinoor.rating == 4.2
+    assert kohinoor.rating_count == 12300
+    assert kohinoor.category_path == ["Grocery & Kitchen", "Atta, Rice & Dal", "Rice"]
+    assert kohinoor.selling_price == 502.0
+
+
+def test_listing_from_dict_rating_v2() -> None:
+    item = listing_from_dict(
+        {
+            "product_id": "1",
+            "name": "Test Rice",
+            "price": 100,
+            "mrp": 120,
+            "rating_v2": {"value": 4.5, "count_text": "1.2k"},
+            "l0_category": "Staples",
+        },
+        1,
+        "rice",
+    )
+    assert item is not None
+    assert item.rating == 4.5
+    assert item.rating_count == 1200
+    assert item.category_path == ["Staples"]
+
+
+def test_listing_from_dict_coerces_numeric_pack() -> None:
+    item = listing_from_dict(
+        {
+            "product_id": "99",
+            "name": "Test Pack",
+            "price": 10,
+            "mrp": 12,
+            "unit": 1,
+            "rating": 4.1,
+            "rating_count": 10,
+            "l0_category": "Staples",
+        },
+        1,
+        "test",
+    )
+    assert item is not None
+    assert item.pack_raw == "1"
+    assert item.rating == 4.1
+    assert item.category_path == ["Staples"]

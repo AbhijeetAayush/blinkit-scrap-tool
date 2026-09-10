@@ -17,5 +17,10 @@ class BlinkitCatalog:
         lon: float,
         session: BrowserSession,
     ) -> list[Listing]:
-        html = await blinkit_browser.fetch_search_html(session, query, lat=lat, lon=lon)
-        return parse_search_html(html, query=query)
+        html, payloads = await blinkit_browser.fetch_search_page(
+            session,
+            query,
+            lat=lat,
+            lon=lon,
+        )
+        return parse_search_html(html, query=query, json_payloads=payloads)
