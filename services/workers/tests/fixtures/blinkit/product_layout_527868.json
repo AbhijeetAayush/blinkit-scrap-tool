@@ -1,0 +1,21 @@
+{
+  "response": {
+    "snippets": [
+      {
+        "widget_type": "PRODUCT",
+        "data": {
+          "product_id": "527868",
+          "name": "Kohinoor Mini Mogra 2 Rice",
+          "rating": 4.2,
+          "rating_count": 12345,
+          "brand": "Kohinoor",
+          "inventory": 12,
+          "max_qty": 6,
+          "is_ad": false,
+          "price": 1,
+          "mrp": 2
+        }
+      }
+    ]
+  }
+}
