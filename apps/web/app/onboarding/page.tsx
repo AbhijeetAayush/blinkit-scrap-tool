@@ -64,11 +64,11 @@ export default function OnboardingPage() {
       <p className="mt-2 text-ink/70">
         Add keywords and store locations on the next screen, check the rows to scrape, then run.
       </p>
-      <form onSubmit={onSubmit} className="mt-8 space-y-4 rounded-2xl border border-ink/10 bg-white/60 p-6">
+      <form onSubmit={onSubmit} className="card mt-8 space-y-4 p-6">
         <label className="block text-sm">
           Brand name
           <input
-            className="mt-1 w-full rounded-lg border border-ink/15 px-3 py-2"
+            className="field mt-1 w-full"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -77,13 +77,13 @@ export default function OnboardingPage() {
         <label className="block text-sm">
           Home city
           <input
-            className="mt-1 w-full rounded-lg border border-ink/15 px-3 py-2"
+            className="field mt-1 w-full"
             value={homeCity}
             onChange={(e) => setHomeCity(e.target.value)}
           />
         </label>
         {error ? <p className="text-sm text-oos">{error}</p> : null}
-        <button type="submit" disabled={busy} className="rounded-full bg-ink px-4 py-2 text-lime disabled:opacity-50">
+        <button type="submit" disabled={busy} className="btn disabled:opacity-50">
           {busy ? "Saving…" : "Continue"}
         </button>
       </form>

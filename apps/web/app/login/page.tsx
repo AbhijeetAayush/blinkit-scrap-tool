@@ -71,14 +71,14 @@ export default function LoginPage() {
 
   return (
     <div className="mx-auto max-w-md pt-16">
-      <p className="text-sm uppercase tracking-[0.2em] text-moss">Digital shelf</p>
-      <h1 className="mt-2 font-display text-4xl">Watch your SKUs on Blinkit</h1>
+      <p className="text-xs font-medium uppercase tracking-[0.2em] text-moss">Digital shelf</p>
+      <h1 className="mt-2 font-display text-4xl tracking-tight">Watch your SKUs on Blinkit</h1>
       <p className="mt-3 text-ink/70">Price, stock, rank, and brand rivals — not platform vs platform.</p>
-      <form onSubmit={onSubmit} className="mt-8 space-y-4 rounded-2xl border border-ink/10 bg-white/60 p-6">
+      <form onSubmit={onSubmit} className="card mt-8 space-y-4 p-6">
         <label className="block text-sm">
           Email
           <input
-            className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-2"
+            className="field mt-1 w-full"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -89,7 +89,7 @@ export default function LoginPage() {
         <label className="block text-sm">
           Password
           <input
-            className="mt-1 w-full rounded-lg border border-ink/15 bg-white px-3 py-2"
+            className="field mt-1 w-full"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -99,11 +99,7 @@ export default function LoginPage() {
           />
         </label>
         {error ? <p className="text-sm text-oos">{error}</p> : null}
-        <button
-          type="submit"
-          disabled={busy}
-          className="w-full rounded-full bg-ink py-2 text-lime disabled:opacity-50"
-        >
+        <button type="submit" disabled={busy} className="btn w-full disabled:opacity-50">
           {busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}
         </button>
         <button
