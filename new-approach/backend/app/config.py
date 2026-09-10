@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     playwright_headless: bool = True
     playwright_nav_timeout_ms: int = 45000
     block_resource_types: str = "image,font,media"
+    search_max_scrolls: int = 14
+    search_scroll_pause_ms: int = 700
+    search_max_cards: int = 48
+    search_stable_rounds: int = 2
 
     proxy_provider: str = "none"
     proxy_server: str = ""

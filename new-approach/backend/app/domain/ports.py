@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
-from uuid import UUID
+from typing import Any, Protocol
 
 from app.domain.models import Listing, ScrapeJob
 
@@ -14,7 +13,13 @@ class BrowserSession(Protocol):
         wait_selector: str | None = None,
         cookies: list[dict] | None = None,
         extra_headers: dict[str, str] | None = None,
-    ) -> str: ...
+        scroll: bool = False,
+        max_scrolls: int | None = None,
+        scroll_pause_ms: int | None = None,
+        max_cards: int | None = None,
+        stable_rounds: int | None = None,
+        capture_json: bool = False,
+    ) -> tuple[str, list[Any]]: ...
 
 
 class PlatformCatalog(Protocol):

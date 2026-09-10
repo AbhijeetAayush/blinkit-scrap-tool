@@ -1,25 +1,106 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
+from contextlib import asynccontextmanager
 
-from playwright.async_api import Browser, BrowserContext, Page, async_playwright
+from playwright.async_api import Browser, BrowserContext, Page, Response, async_playwright
 
 from app.config import Settings, get_settings
 from app.infrastructure.browser.proxy import resolve_proxy
 
+_JSON_URL_HINTS = (
+    "search",
+    "listing",
+    "layout",
+    "catalog",
+    "product",
+    "snippet",
+    "feed",
+    "grocery",
+)
+
 
 class PlaywrightBrowserSession:
-    def __init__(self, context: BrowserContext, timeout_ms: int) -> None:
+    def __init__(self, context: BrowserContext, timeout_ms: int, settings: Settings) -> None:
         self._context = context
         self._timeout_ms = timeout_ms
+        self._settings = settings
         self._page: Page | None = None
+        self._json_payloads: list[Any] = []
 
     async def _ensure_page(self) -> Page:
         if self._page is None or self._page.is_closed():
             self._page = await self._context.new_page()
             self._page.set_default_timeout(self._timeout_ms)
+            self._page.on("response", self._on_response)
         return self._page
+
+    async def _on_response(self, response: Response) -> None:
+        try:
+            req = response.request
+            if req.resource_type not in {"xhr", "fetch"}:
+                return
+            url = response.url.lower()
+            if not any(h in url for h in _JSON_URL_HINTS):
+                return
+            ctype = (response.headers.get("content-type") or "").lower()
+            if "json" not in ctype and "javascript" not in ctype:
+                return
+            if response.status >= 400:
+                return
+            data = await response.json()
+            if data is not None:
+                self._json_payloads.append(data)
+        except Exception:
+            return
+
+    async def _card_count(self, page: Page) -> int:
+        return await page.locator('div[role="button"][id]').count()
+
+    async def _scroll_once(self, page: Page) -> None:
+        await page.evaluate(
+            """() => {
+              const cards = document.querySelectorAll('div[role="button"][id]');
+              let node = cards.length ? cards[cards.length - 1] : null;
+              while (node) {
+                const style = window.getComputedStyle(node);
+                const oy = style.overflowY;
+                if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+                    && node.scrollHeight > node.clientHeight + 40) {
+                  node.scrollTop = Math.min(node.scrollTop + node.clientHeight * 0.95, node.scrollHeight);
+                  return 'container';
+                }
+                node = node.parentElement;
+              }
+              window.scrollBy(0, Math.floor(window.innerHeight * 0.9));
+              return 'window';
+            }"""
+        )
+
+    async def _lazy_scroll(
+        self,
+        page: Page,
+        *,
+        max_scrolls: int,
+        scroll_pause_ms: int,
+        max_cards: int,
+        stable_rounds: int,
+    ) -> None:
+        stable = 0
+        last = await self._card_count(page)
+        for _ in range(max_scrolls):
+            if last >= max_cards:
+                break
+            await self._scroll_once(page)
+            await page.wait_for_timeout(scroll_pause_ms)
+            count = await self._card_count(page)
+            if count <= last:
+                stable += 1
+                if stable >= stable_rounds:
+                    break
+            else:
+                stable = 0
+            last = count
 
     async def fetch_html(
         self,
@@ -28,7 +109,14 @@ class PlaywrightBrowserSession:
         wait_selector: str | None = None,
         cookies: list[dict] | None = None,
         extra_headers: dict[str, str] | None = None,
-    ) -> str:
+        scroll: bool = False,
+        max_scrolls: int | None = None,
+        scroll_pause_ms: int | None = None,
+        max_cards: int | None = None,
+        stable_rounds: int | None = None,
+        capture_json: bool = False,
+    ) -> tuple[str, list[Any]]:
+        self._json_payloads = []
         if cookies:
             await self._context.add_cookies(cookies)
         if extra_headers:
@@ -37,7 +125,25 @@ class PlaywrightBrowserSession:
         await page.goto(url, wait_until="domcontentloaded")
         if wait_selector:
             await page.wait_for_selector(wait_selector, timeout=self._timeout_ms)
-        return await page.content()
+        if scroll:
+            await self._lazy_scroll(
+                page,
+                max_scrolls=max_scrolls if max_scrolls is not None else self._settings.search_max_scrolls,
+                scroll_pause_ms=(
+                    scroll_pause_ms
+                    if scroll_pause_ms is not None
+                    else self._settings.search_scroll_pause_ms
+                ),
+                max_cards=max_cards if max_cards is not None else self._settings.search_max_cards,
+                stable_rounds=(
+                    stable_rounds
+                    if stable_rounds is not None
+                    else self._settings.search_stable_rounds
+                ),
+            )
+        html = await page.content()
+        payloads = list(self._json_payloads) if capture_json else []
+        return html, payloads
 
 
 @asynccontextmanager
@@ -73,7 +179,7 @@ async def launch_session(
 
         if block:
             await context.route("**/*", _route)
-        yield PlaywrightBrowserSession(context, cfg.playwright_nav_timeout_ms)
+        yield PlaywrightBrowserSession(context, cfg.playwright_nav_timeout_ms, cfg)
     finally:
         if context:
             await context.close()
