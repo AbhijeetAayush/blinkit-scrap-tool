@@ -72,6 +72,7 @@ export type LatestObservation = {
   unit_price_per_kg: number | null;
   observed_slot: string;
   platform: string;
+  merchant_id: string | null;
 };
 
 export type AlertRow = {

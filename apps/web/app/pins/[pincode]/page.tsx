@@ -38,7 +38,9 @@ export default async function PinDetailPage({ params }: { params: Promise<{ pinc
   return (
     <div>
       <h1 className="font-display text-3xl">Pin {pincode}</h1>
-      <p className="mt-1 text-ink/70">Latest harvest listings for this pincode. Same product can appear twice if two keywords returned it.</p>
+      <p className="mt-1 text-ink/70">
+        Latest harvest for this pincode, by store. Two merchants on the same pin are two rows, not a cloned pin.
+      </p>
       <div className="mt-6 overflow-x-auto rounded-2xl border border-ink/10 bg-white/70">
         <table className="w-full min-w-[1100px] text-left text-sm">
           <thead className="bg-ink/5 text-ink/60">
@@ -51,6 +53,8 @@ export default async function PinDetailPage({ params }: { params: Promise<{ pinc
               <th className="px-3 py-2">Discount %</th>
               <th className="px-3 py-2">Sponsored</th>
               <th className="px-3 py-2">Rating</th>
+              <th className="px-3 py-2">Reviews</th>
+              <th className="px-3 py-2">Store</th>
               <th className="px-3 py-2">Keyword</th>
               <th className="px-3 py-2">Stock</th>
               <th className="px-3 py-2">Rank</th>
@@ -59,7 +63,7 @@ export default async function PinDetailPage({ params }: { params: Promise<{ pinc
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={`${row.product_id}-${row.search_query ?? ""}`} className="border-t border-ink/5">
+              <tr key={`${row.merchant_id ?? ""}-${row.product_id}-${row.search_query ?? ""}`} className="border-t border-ink/5">
                 <td className="px-3 py-2">{row.sku_name}</td>
                 <td className="px-3 py-2">{row.brand_name ?? "—"}</td>
                 <td className="px-3 py-2">{packLabel(row)}</td>
@@ -68,6 +72,8 @@ export default async function PinDetailPage({ params }: { params: Promise<{ pinc
                 <td className="px-3 py-2 tabular">{row.discount_percent ?? "—"}</td>
                 <td className="px-3 py-2">{row.is_sponsored ? "yes" : "—"}</td>
                 <td className="px-3 py-2 tabular">{row.rating ?? "—"}</td>
+                <td className="px-3 py-2 tabular">{row.rating_count ?? "—"}</td>
+                <td className="px-3 py-2">{row.merchant_id ?? "—"}</td>
                 <td className="px-3 py-2">{row.search_query || "—"}</td>
                 <td className={`px-3 py-2 ${row.availability === "in_stock" ? "text-stock" : "text-oos"}`}>
                   {row.availability}

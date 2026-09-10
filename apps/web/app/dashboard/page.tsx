@@ -73,7 +73,10 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-3xl">Latest shelf</h1>
-          <p className="mt-1 text-ink/70">Every product card from the last scrape of your selected keywords and stores.</p>
+          <p className="mt-1 text-ink/70">
+            Every product card from the last scrape of your selected keywords and stores. Two stores on the same pin
+            stay as two rows (apply migration 0004 if they collapse).
+          </p>
         </div>
         <Link href="/setup" className="rounded-full bg-ink px-4 py-2 text-sm text-lime">
           Run from Setup
@@ -149,6 +152,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
               <th className="px-3 py-2">Discount %</th>
               <th className="px-3 py-2">Sponsored</th>
               <th className="px-3 py-2">Rating</th>
+              <th className="px-3 py-2">Reviews</th>
+              <th className="px-3 py-2">Store</th>
               <th className="px-3 py-2">Pin</th>
               <th className="px-3 py-2">Keyword</th>
               <th className="px-3 py-2">Stock</th>
@@ -158,7 +163,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={`${row.pincode}-${row.product_id}-${row.search_query ?? ""}`} className="border-t border-ink/5">
+              <tr key={`${row.merchant_id ?? ""}-${row.pincode}-${row.product_id}-${row.search_query ?? ""}`} className="border-t border-ink/5">
                 <td className="px-3 py-2">{row.sku_name}</td>
                 <td className="px-3 py-2">{row.brand_name ?? "—"}</td>
                 <td className="px-3 py-2">{packLabel(row)}</td>
@@ -167,6 +172,8 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
                 <td className="px-3 py-2 tabular">{row.discount_percent ?? "—"}</td>
                 <td className="px-3 py-2">{row.is_sponsored ? "yes" : "—"}</td>
                 <td className="px-3 py-2 tabular">{row.rating ?? "—"}</td>
+                <td className="px-3 py-2 tabular">{row.rating_count ?? "—"}</td>
+                <td className="px-3 py-2">{row.merchant_id ?? "—"}</td>
                 <td className="px-3 py-2">
                   <Link className="underline" href={`/pins/${row.pincode}`}>
                     {row.pincode}

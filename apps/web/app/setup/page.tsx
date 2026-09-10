@@ -63,8 +63,8 @@ export default function SetupPage() {
           <p className="mt-2 text-sm text-ink/60">Check at least one keyword and one location.</p>
         ) : (
           <p className="mt-2 text-sm text-ink/60">
-            About {pages} ScrapingBee searches ({keywordIds.size} keywords × {pinIds.size} locations). Wait a minute,
-            then open Shelf.
+            About {pages} searches against the daily search budget ({keywordIds.size} keywords × {pinIds.size} locations).
+            Wait until the button leaves Working… then open Shelf.
           </p>
         )}
         <div className="mt-4">

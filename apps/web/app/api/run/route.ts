@@ -27,7 +27,7 @@ function dispatchClientError(text: string): string | null {
       pages?: number;
     };
     if (parsed.status === "budget") {
-      return `Not enough ScrapingBee credits for ${parsed.pages} searches (need ${parsed.needed}, remaining ${parsed.remaining}). Select fewer rows.`;
+      return `Not enough daily search budget for ${parsed.pages} searches (need ${parsed.needed}, remaining ${parsed.remaining}). Select fewer rows.`;
     }
     if (parsed.status === "error") {
       return parsed.error || "Dispatch rejected the run";
@@ -86,6 +86,36 @@ export async function POST(request: Request) {
     pincode_ids: ownedPins,
   };
 
+  if (runSecret) {
+    const res = await fetch(dispatchUrl.replace(/\/$/, ""), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-run-secret": runSecret,
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: `Dispatch ${res.status}: ${text.slice(0, 280)}`, upstream: res.status },
+        { status: 502 },
+      );
+    }
+    const dispatchError = dispatchClientError(text);
+    if (dispatchError) {
+      return NextResponse.json({ error: dispatchError }, { status: 400 });
+    }
+    let runId: string | undefined;
+    try {
+      const parsed = JSON.parse(text) as { run_id?: string };
+      runId = parsed.run_id;
+    } catch {
+      runId = undefined;
+    }
+    return NextResponse.json({ ok: true, via: "dispatch", run_id: runId, body: text.slice(0, 500) });
+  }
+
   const tokenProblem = token ? qstashTokenProblem(token) : "QSTASH_TOKEN missing";
   const canQstash = Boolean(token) && !tokenProblem;
 
@@ -109,31 +139,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true, via: "qstash", body: text.slice(0, 500) });
   }
 
-  if (!runSecret) {
-    return NextResponse.json(
-      { error: tokenProblem || "Set MANUAL_RUN_SECRET or a real QSTASH_TOKEN in apps/web/.env.local" },
-      { status: 500 },
-    );
-  }
-
-  const res = await fetch(dispatchUrl.replace(/\/$/, ""), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-run-secret": runSecret,
-    },
-    body: JSON.stringify(payload),
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: `Dispatch ${res.status}: ${text.slice(0, 280)}`, upstream: res.status },
-      { status: 502 },
-    );
-  }
-  const dispatchError = dispatchClientError(text);
-  if (dispatchError) {
-    return NextResponse.json({ error: dispatchError }, { status: 400 });
-  }
-  return NextResponse.json({ ok: true, via: "dispatch", body: text.slice(0, 500) });
+  return NextResponse.json(
+    { error: tokenProblem || "Set MANUAL_RUN_SECRET or a real QSTASH_TOKEN in apps/web/.env.local" },
+    { status: 500 },
+  );
 }
