@@ -91,6 +91,7 @@ export default function ShelfPage() {
             <tr>
               <th>Name</th>
               <th>Brand</th>
+              <th>Category</th>
               <th>Pack</th>
               <th>MRP</th>
               <th>Selling</th>
@@ -111,7 +112,7 @@ export default function ShelfPage() {
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={17} className="text-zinc-500">
+                <td colSpan={18} className="text-zinc-500">
                   No shelf rows.
                 </td>
               </tr>
@@ -133,6 +134,9 @@ export default function ShelfPage() {
                     )}
                   </td>
                   <td>{row.brand_name ?? "—"}</td>
+                  <td className="max-w-[12rem] truncate">
+                    {row.category_path?.length ? row.category_path.join(" › ") : "—"}
+                  </td>
                   <td>{packLabel(row)}</td>
                   <td className="tabular-nums">{row.mrp ?? "—"}</td>
                   <td className="tabular-nums">{row.selling_price ?? "—"}</td>
