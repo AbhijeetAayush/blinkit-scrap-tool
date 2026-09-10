@@ -1,5 +1,3 @@
-"use client";
-
 import Link from "next/link";
 
 const STEPS = [
@@ -10,7 +8,7 @@ const STEPS = [
 
 export function SetupStepper({ current }: { current: "onboarding" | "setup" | "dashboard" }) {
   return (
-    <ol className="mb-8 flex flex-wrap gap-2 text-sm">
+    <ol className="mb-7 flex flex-wrap gap-2 text-sm">
       {STEPS.map((step) => {
         const active =
           (current === "onboarding" && step.href === "/onboarding") ||
@@ -18,10 +16,7 @@ export function SetupStepper({ current }: { current: "onboarding" | "setup" | "d
           (current === "dashboard" && step.href === "/dashboard");
         return (
           <li key={step.href}>
-            <Link
-              href={step.href}
-              className={`rounded-full px-3 py-1 ${active ? "bg-ink text-lime" : "border border-ink/15 text-ink/60"}`}
-            >
+            <Link href={step.href} prefetch className={active ? "btn" : "btn-ghost text-ink/60"}>
               {step.label}
             </Link>
           </li>

@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
+import { debounce } from "@/lib/debounce";
 import { headerIndex, parseCsv } from "@/lib/csv";
 import { normalizeKeyword, uniqueKeywords } from "@/lib/normalize-keyword";
 import type { Keyword } from "@/lib/types";
@@ -11,16 +12,12 @@ const PAGE = 50;
 const CHUNK = 200;
 const MAX_FILE = 2_000_000;
 
-export function KeywordManager({
+export const KeywordManager = memo(function KeywordManager({
   brandId,
-  selected,
   onSelectionChange,
-  onCount,
 }: {
   brandId: string;
-  selected: Set<string>;
-  onSelectionChange: (next: Set<string>) => void;
-  onCount?: (n: number) => void;
+  onSelectionChange?: (ids: string[]) => void;
 }) {
   const [rows, setRows] = useState<Keyword[]>([]);
   const [page, setPage] = useState(0);
@@ -29,33 +26,44 @@ export function KeywordManager({
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [manual, setManual] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const searchRef = useRef(search);
+  searchRef.current = search;
 
-  async function load(offset: number, q = search) {
+  function emit(next: Set<string>) {
+    setSelected(next);
+    onSelectionChange?.(Array.from(next));
+  }
+
+  async function load(offset: number, q = searchRef.current) {
     const supabase = createClient();
     let list = supabase
       .from("keywords")
-      .select("*")
+      .select("id, brand_id, query, active")
       .eq("brand_id", brandId)
       .order("query")
       .range(offset, offset + PAGE - 1);
-    let countQ = supabase.from("keywords").select("id", { count: "exact", head: true }).eq("brand_id", brandId);
-    if (q.trim()) {
-      const term = `%${q.trim()}%`;
-      list = list.ilike("query", term);
-      countQ = countQ.ilike("query", term);
-    }
-    const [{ data, error: qError }, { count, error: cError }] = await Promise.all([list, countQ]);
-    const err = qError || cError;
-    if (err) setError(err.message);
+    if (q.trim()) list = list.ilike("query", `%${q.trim()}%`);
+    const { data, error: qError } = await list;
+    if (qError) setError(qError.message);
     else {
       setError(null);
       setRows((data as Keyword[]) ?? []);
-      onCount?.(count ?? 0);
     }
   }
 
+  const debouncedLoad = useMemo(
+    () =>
+      debounce((q: string) => {
+        setPage(0);
+        void load(0, q);
+      }, 180),
+    [brandId],
+  );
+
   useEffect(() => {
-    void load(0);
+    void load(0, "");
+    return () => debouncedLoad.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
 
@@ -63,13 +71,13 @@ export function KeywordManager({
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    onSelectionChange(next);
+    emit(next);
   }
 
   function selectVisible() {
     const next = new Set(selected);
     rows.forEach((r) => next.add(r.id));
-    onSelectionChange(next);
+    emit(next);
   }
 
   async function selectMatching() {
@@ -85,7 +93,7 @@ export function KeywordManager({
     if (ids.length > 50 && !window.confirm(`Select ${ids.length} matching keywords?`)) return;
     const next = new Set(selected);
     ids.forEach((id) => next.add(id));
-    onSelectionChange(next);
+    emit(next);
     setInfo(`Selected ${ids.length} matching keywords.`);
   }
 
@@ -171,17 +179,17 @@ export function KeywordManager({
 
   return (
     <section>
-      <form onSubmit={addManual} className="flex flex-wrap gap-2 rounded-2xl border border-ink/10 bg-white/60 p-4">
+      <form onSubmit={addManual} className="card flex flex-wrap gap-2 p-4">
         <input
-          className="min-w-[220px] flex-1 rounded-lg border border-ink/15 px-3 py-2"
+          className="field min-w-[220px] flex-1"
           placeholder="Add keyword (e.g. mini mogra rice 5 kg)"
           value={manual}
           onChange={(e) => setManual(e.target.value)}
         />
-        <button type="submit" disabled={busy} className="rounded-full bg-ink px-4 py-2 text-sm text-lime disabled:opacity-50">
+        <button type="submit" disabled={busy} className="btn disabled:opacity-50">
           Add keyword
         </button>
-        <label className="rounded-full border border-ink/20 px-4 py-2 text-sm">
+        <label className="btn-ghost cursor-pointer text-sm">
           Upload CSV
           <input
             type="file"
@@ -197,57 +205,52 @@ export function KeywordManager({
 
       <div className="mt-4 flex flex-wrap gap-2">
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2 text-sm"
+          className="field"
           placeholder="Search keywords"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              setPage(0);
-              void load(0, search);
-            }
+          onChange={(e) => {
+            const q = e.target.value;
+            setSearch(q);
+            debouncedLoad(q);
           }}
         />
-        <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={() => { setPage(0); void load(0, search); }}>
-          Search
-        </button>
-        <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={selectVisible}>
+        <button type="button" className="btn-ghost" onClick={selectVisible}>
           Select visible
         </button>
-        <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={() => void selectMatching()}>
+        <button type="button" className="btn-ghost" onClick={() => void selectMatching()}>
           Select matching search
         </button>
-        <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={() => onSelectionChange(new Set())}>
+        <button type="button" className="btn-ghost" onClick={() => emit(new Set())}>
           Clear selection
         </button>
         <span className="self-center text-sm text-ink/60">{selected.size} selected</span>
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-2xl border border-ink/10 bg-white/70">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-ink/5 text-ink/60">
+      <div className="table-wrap mt-4">
+        <table className="data-table">
+          <thead>
             <tr>
-              <th className="px-3 py-2">Scrape</th>
-              <th className="px-3 py-2">Keyword</th>
-              <th className="px-3 py-2">Active</th>
+              <th>Scrape</th>
+              <th>Keyword</th>
+              <th>Active</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td className="px-3 py-4 text-ink/50" colSpan={3}>
+                <td className="empty-cell" colSpan={3}>
                   No keywords yet. Upload keywords.csv or add one by hand.
                 </td>
               </tr>
             ) : (
               rows.map((row) => (
-                <tr key={row.id} className="border-t border-ink/5">
-                  <td className="px-3 py-2">
+                <tr key={row.id}>
+                  <td>
                     <input type="checkbox" checked={selected.has(row.id)} onChange={() => toggle(row.id)} />
                   </td>
-                  <td className="px-3 py-2">{row.query}</td>
-                  <td className="px-3 py-2">
-                    <button type="button" className="underline" onClick={() => void toggleActive(row)}>
+                  <td>{row.query}</td>
+                  <td>
+                    <button type="button" className="link" onClick={() => void toggleActive(row)}>
                       {row.active ? "on" : "off"}
                     </button>
                   </td>
@@ -261,24 +264,24 @@ export function KeywordManager({
         <div className="mt-4 flex gap-2">
           <button
             type="button"
-            className="rounded-full border border-ink/20 px-3 py-1 text-sm disabled:opacity-40"
+            className="btn-ghost disabled:opacity-40"
             disabled={page === 0}
             onClick={() => {
               const next = Math.max(0, page - 1);
               setPage(next);
-              void load(next * PAGE, search);
+              void load(next * PAGE);
             }}
           >
             Previous page
           </button>
           <button
             type="button"
-            className="rounded-full border border-ink/20 px-3 py-1 text-sm disabled:opacity-40"
+            className="btn-ghost disabled:opacity-40"
             disabled={rows.length < PAGE}
             onClick={() => {
               const next = page + 1;
               setPage(next);
-              void load(next * PAGE, search);
+              void load(next * PAGE);
             }}
           >
             Next page
@@ -287,4 +290,4 @@ export function KeywordManager({
       ) : null}
     </section>
   );
-}
+});

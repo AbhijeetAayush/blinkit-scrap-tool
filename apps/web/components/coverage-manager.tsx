@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, memo, useEffect, useMemo, useRef, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
+import { debounce } from "@/lib/debounce";
 import { headerIndex, parseCsv } from "@/lib/csv";
 import type { CoveragePin } from "@/lib/types";
 
@@ -14,16 +15,12 @@ function roundCoord(n: number): number {
   return Math.round(n * 1e6) / 1e6;
 }
 
-export function CoverageManager({
+export const CoverageManager = memo(function CoverageManager({
   brandId,
-  selected,
   onSelectionChange,
-  onCount,
 }: {
   brandId: string;
-  selected?: Set<string>;
-  onSelectionChange?: (next: Set<string>) => void;
-  onCount?: (n: number) => void;
+  onSelectionChange?: (ids: string[]) => void;
 }) {
   const [rows, setRows] = useState<CoveragePin[]>([]);
   const [page, setPage] = useState(0);
@@ -31,6 +28,9 @@ export function CoverageManager({
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const searchRef = useRef(search);
+  searchRef.current = search;
   const [form, setForm] = useState({
     store_name: "",
     pincode: "",
@@ -42,48 +42,59 @@ export function CoverageManager({
     tier: "hot",
   });
 
-  async function load(offset: number, q = search) {
+  const canSelect = Boolean(onSelectionChange);
+
+  function emit(next: Set<string>) {
+    setSelected(next);
+    onSelectionChange?.(Array.from(next));
+  }
+
+  async function load(offset: number, q = searchRef.current) {
     const supabase = createClient();
     let list = supabase
       .from("pincodes")
-      .select("*")
+      .select("id, brand_id, platform, pincode, city, locality, store_name, lat, lon, tier, active")
       .eq("brand_id", brandId)
       .order("pincode")
       .range(offset, offset + PAGE - 1);
-    let countQ = supabase.from("pincodes").select("id", { count: "exact", head: true }).eq("brand_id", brandId);
     if (q.trim()) {
       const term = `%${q.trim()}%`;
       list = list.or(`pincode.ilike.${term},locality.ilike.${term},store_name.ilike.${term}`);
-      countQ = countQ.or(`pincode.ilike.${term},locality.ilike.${term},store_name.ilike.${term}`);
     }
-    const [{ data, error: qError }, { count, error: cError }] = await Promise.all([list, countQ]);
-    const err = qError || cError;
-    if (err) setError(err.message);
+    const { data, error: qError } = await list;
+    if (qError) setError(qError.message);
     else {
       setError(null);
       setRows((data as CoveragePin[]) ?? []);
-      onCount?.(count ?? 0);
     }
   }
 
+  const debouncedLoad = useMemo(
+    () =>
+      debounce((q: string) => {
+        setPage(0);
+        void load(0, q);
+      }, 180),
+    [brandId],
+  );
+
   useEffect(() => {
-    void load(0);
+    void load(0, "");
+    return () => debouncedLoad.cancel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandId]);
 
   function toggle(id: string) {
-    if (!onSelectionChange) return;
-    const next = new Set(chosen);
+    const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    onSelectionChange(next);
+    emit(next);
   }
 
   function selectVisible() {
-    if (!onSelectionChange) return;
-    const next = new Set(chosen);
+    const next = new Set(selected);
     rows.forEach((r) => next.add(r.id));
-    onSelectionChange(next);
+    emit(next);
   }
 
   async function selectMatching() {
@@ -100,9 +111,9 @@ export function CoverageManager({
     }
     const ids = (data ?? []).map((r) => r.id as string);
     if (ids.length > 50 && !window.confirm(`Select ${ids.length} locations?`)) return;
-    const next = new Set(chosen);
+    const next = new Set(selected);
     ids.forEach((id) => next.add(id));
-    onSelectionChange?.(next);
+    emit(next);
     setInfo(`Selected ${ids.length} locations.`);
   }
 
@@ -206,9 +217,6 @@ export function CoverageManager({
     await load(0);
   }
 
-  const chosen = selected ?? new Set<string>();
-  const canSelect = Boolean(onSelectionChange);
-
   async function toggleActive(pin: CoveragePin) {
     const supabase = createClient();
     await supabase.from("pincodes").update({ active: !pin.active }).eq("id", pin.id);
@@ -219,53 +227,49 @@ export function CoverageManager({
 
   return (
     <section>
-      <form onSubmit={onSubmit} className="grid gap-3 rounded-2xl border border-ink/10 bg-white/60 p-4 md:grid-cols-3">
+      <form onSubmit={onSubmit} className="card grid gap-3 p-4 md:grid-cols-3">
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2"
+          className="field"
           placeholder="Store name"
           value={form.store_name}
           onChange={(e) => setForm({ ...form, store_name: e.target.value })}
         />
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2"
+          className="field"
           placeholder="Pincode"
           value={form.pincode}
           onChange={(e) => setForm({ ...form, pincode: e.target.value })}
           required
         />
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2"
+          className="field"
           placeholder="Area / locality"
           value={form.locality}
           onChange={(e) => setForm({ ...form, locality: e.target.value })}
         />
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2"
+          className="field"
           placeholder="Latitude"
           value={form.lat}
           onChange={(e) => setForm({ ...form, lat: e.target.value })}
           required
         />
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2"
+          className="field"
           placeholder="Longitude"
           value={form.lon}
           onChange={(e) => setForm({ ...form, lon: e.target.value })}
           required
         />
-        <select
-          className="rounded-lg border border-ink/15 px-3 py-2"
-          value={form.tier}
-          onChange={(e) => setForm({ ...form, tier: e.target.value })}
-        >
+        <select className="field" value={form.tier} onChange={(e) => setForm({ ...form, tier: e.target.value })}>
           <option value="hot">hot</option>
           <option value="warm">warm</option>
           <option value="cold">cold</option>
         </select>
-        <button type="submit" disabled={busy} className="rounded-full bg-ink px-4 py-2 text-lime disabled:opacity-50">
+        <button type="submit" disabled={busy} className="btn disabled:opacity-50">
           {busy ? "Saving…" : "Add location"}
         </button>
-        <label className="rounded-full border border-ink/20 px-4 py-2 text-sm text-center">
+        <label className="btn-ghost cursor-pointer text-center text-sm">
           Upload CSV
           <input type="file" accept=".csv,text/csv" className="hidden" onChange={(e) => void onFile(e.target.files?.[0] ?? null)} />
         </label>
@@ -276,75 +280,70 @@ export function CoverageManager({
 
       <div className="mt-4 flex flex-wrap gap-2">
         <input
-          className="rounded-lg border border-ink/15 px-3 py-2 text-sm"
+          className="field"
           placeholder="Search pin / area / store"
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              setPage(0);
-              void load(0, search);
-            }
+          onChange={(e) => {
+            const q = e.target.value;
+            setSearch(q);
+            debouncedLoad(q);
           }}
         />
-        <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={() => { setPage(0); void load(0, search); }}>
-          Search
-        </button>
         {canSelect ? (
           <>
-            <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={selectVisible}>
+            <button type="button" className="btn-ghost" onClick={selectVisible}>
               Select visible
             </button>
-            <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={() => void selectMatching()}>
+            <button type="button" className="btn-ghost" onClick={() => void selectMatching()}>
               Select matching search
             </button>
-            <button type="button" className="rounded-full border border-ink/20 px-3 py-1 text-sm" onClick={() => onSelectionChange?.(new Set())}>
+            <button type="button" className="btn-ghost" onClick={() => emit(new Set())}>
               Clear selection
             </button>
-            <span className="self-center text-sm text-ink/60">{chosen.size} selected</span>
+            <span className="self-center text-sm text-ink/60">{selected.size} selected</span>
           </>
         ) : null}
       </div>
 
-      <div className="mt-4 overflow-x-auto rounded-2xl border border-ink/10 bg-white/70">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-ink/5 text-ink/60">
+      <div className="table-wrap mt-4">
+        <table className="data-table">
+          <thead>
             <tr>
-              {canSelect ? <th className="px-3 py-2">Scrape</th> : null}
-              <th className="px-3 py-2">Store</th>
-              <th className="px-3 py-2">Pin</th>
-              <th className="px-3 py-2">Area</th>
-              <th className="px-3 py-2">Lat / lon</th>
-              <th className="px-3 py-2">Active</th>
+              {canSelect ? <th>Scrape</th> : null}
+              <th>Store</th>
+              <th>Pin</th>
+              <th>Area</th>
+              <th>Lat / lon</th>
+              <th>Active</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td className="px-3 py-4 text-ink/50" colSpan={6}>
+                <td className="empty-cell" colSpan={6}>
                   No locations yet. Upload blinkit_pune_stores.csv or add lat/lon by hand.
                 </td>
               </tr>
             ) : (
               rows.map((pin) => (
-                <tr key={pin.id} className="border-t border-ink/5">
+                <tr key={pin.id}>
                   {canSelect ? (
-                    <td className="px-3 py-2">
-                      <input type="checkbox" checked={chosen.has(pin.id)} onChange={() => toggle(pin.id)} />
+                    <td>
+                      <input type="checkbox" checked={selected.has(pin.id)} onChange={() => toggle(pin.id)} />
                     </td>
                   ) : null}
-                  <td className="px-3 py-2">{pin.store_name}</td>
-                  <td className="px-3 py-2">
-                    <a className="underline" href={`/pins/${pin.pincode}`}>
+                  <td>{pin.store_name}</td>
+                  <td>
+                    <a className="link" href={`/pins/${pin.pincode}`}>
                       {pin.pincode}
                     </a>
                   </td>
-                  <td className="px-3 py-2">{pin.locality}</td>
-                  <td className="px-3 py-2 tabular">
+                  <td>{pin.locality}</td>
+                  <td className="tabular">
                     {pin.lat}, {pin.lon}
                   </td>
-                  <td className="px-3 py-2">
-                    <button type="button" className="underline" onClick={() => void toggleActive(pin)}>
+                  <td>
+                    <button type="button" className="link" onClick={() => void toggleActive(pin)}>
                       {pin.active ? "on" : "off"}
                     </button>
                   </td>
@@ -358,24 +357,24 @@ export function CoverageManager({
         <div className="mt-4 flex gap-2">
           <button
             type="button"
-            className="rounded-full border border-ink/20 px-3 py-1 text-sm disabled:opacity-40"
+            className="btn-ghost disabled:opacity-40"
             disabled={page === 0}
             onClick={() => {
               const next = Math.max(0, page - 1);
               setPage(next);
-              void load(next * PAGE, search);
+              void load(next * PAGE);
             }}
           >
             Previous page
           </button>
           <button
             type="button"
-            className="rounded-full border border-ink/20 px-3 py-1 text-sm disabled:opacity-40"
+            className="btn-ghost disabled:opacity-40"
             disabled={rows.length < PAGE}
             onClick={() => {
               const next = page + 1;
               setPage(next);
-              void load(next * PAGE, search);
+              void load(next * PAGE);
             }}
           >
             Next page
@@ -384,4 +383,4 @@ export function CoverageManager({
       ) : null}
     </section>
   );
-}
+});
