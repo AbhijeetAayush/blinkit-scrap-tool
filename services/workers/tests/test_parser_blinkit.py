@@ -48,3 +48,33 @@ def test_merchant_id_from_preloaded_state():
 def test_empty_parse_raises_and_does_not_invent_oos():
     with pytest.raises(ParseEmptyError):
         parse_search_html("<html><body><p>no products</p></body></html>", query="milk")
+
+
+def test_sponsored_ad_png_is_true():
+    html = """
+    <div role="button" id="555001">
+      <img src="https://cdn.grofers.com/layout-engine/v2/ad_without_bg.png" />
+      Kohinoor Mini Mogra 1 kg ₹100 ₹140 ADD
+    </div>
+    """
+    listings = parse_search_html(html, query="rice")
+    assert listings[0].is_sponsored is True
+
+
+def test_card_without_ad_asset_is_not_sponsored():
+    html = '<div role="button" id="555002">Addison Mini Mogra Rice 1 kg ₹100 ₹140 ADD</div>'
+    listings = parse_search_html(html, query="rice")
+    assert listings[0].is_sponsored is not True
+
+
+def test_card_image_uses_srcset_not_opacity_placeholder():
+    html = """
+    <div role="button" id="555003">
+      <img class="tw-opacity-0" src="" />
+      <img srcset="https://cdn.grofers.com/da/product.jpg 1x, https://cdn.grofers.com/da/product@2x.jpg 2x" />
+      Fortune Rice 1 kg ₹90 ₹100 ADD
+    </div>
+    """
+    listings = parse_search_html(html, query="rice")
+    assert listings[0].image_url and "cdn.grofers.com" in listings[0].image_url
+    assert "product.jpg" in listings[0].image_url

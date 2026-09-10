@@ -110,13 +110,60 @@ def _parse_count(raw: str) -> int | None:
     return int(round(n))
 
 
+def _rating_fields(raw: dict) -> tuple[float | None, int | None]:
+    rating = raw.get("rating")
+    count = (
+        raw.get("rating_count")
+        or raw.get("ratingCount")
+        or raw.get("number_of_ratings")
+        or raw.get("ratings_count")
+    )
+    if isinstance(rating, dict):
+        count = count if count is not None else (
+            rating.get("count")
+            or rating.get("rating_count")
+            or rating.get("count_text")
+            or rating.get("countText")
+        )
+        rating = rating.get("value") or rating.get("average") or rating.get("avg") or rating.get("rating")
+    rating_v2 = raw.get("rating_v2") or raw.get("ratingV2")
+    if isinstance(rating_v2, dict):
+        if rating is None:
+            rating = rating_v2.get("value") or rating_v2.get("rating")
+        if count is None:
+            count = rating_v2.get("count") or rating_v2.get("count_text")
+    parsed_rating = None
+    if rating is not None and not isinstance(rating, dict):
+        try:
+            parsed_rating = float(str(rating).strip())
+        except ValueError:
+            parsed_rating = None
+    parsed_count = None
+    if isinstance(count, bool):
+        parsed_count = None
+    elif isinstance(count, int):
+        parsed_count = count
+    elif isinstance(count, float):
+        parsed_count = int(round(count))
+    elif isinstance(count, str):
+        parsed_count = _parse_count(count)
+    return parsed_rating, parsed_count
+
+
 def _listing_from_dict(raw: dict, position: int, query: str) -> ParsedListing | None:
     product_id = str(raw.get("product_id") or raw.get("productId") or "")
     name = raw.get("name") or raw.get("title") or raw.get("sku_name")
     if isinstance(name, dict):
         name = name.get("text") or name.get("value")
-    if not product_id or not isinstance(name, str) or not name:
+    if not name:
+        name = raw.get("display_name") or raw.get("product_name")
+    rating, rating_count = _rating_fields(raw)
+    if not product_id:
         return None
+    if not isinstance(name, str) or not name:
+        if rating is None and rating_count is None:
+            return None
+        name = f"product {product_id}"
     price = raw.get("price") or raw.get("selling_price") or raw.get("offer_price")
     mrp = raw.get("mrp")
     in_stock = raw.get("in_stock")
@@ -129,6 +176,10 @@ def _listing_from_dict(raw: dict, position: int, query: str) -> ParsedListing | 
         if off_m:
             off = float(off_m.group(1))
     brand = raw.get("brand") or raw.get("brand_name")
+    inventory = raw.get("inventory") or raw.get("inventory_shown")
+    if isinstance(inventory, dict):
+        inventory = inventory.get("count") or inventory.get("value")
+    qty = raw.get("max_qty") if raw.get("max_qty") is not None else raw.get("max_allowed_quantity")
     return ParsedListing(
         product_id=product_id,
         variant_id=str(raw.get("variant_id") or raw.get("variantId") or product_id),
@@ -139,15 +190,13 @@ def _listing_from_dict(raw: dict, position: int, query: str) -> ParsedListing | 
         mrp=float(mrp) if mrp is not None else None,
         selling_price=float(price) if price is not None else None,
         in_stock=bool(in_stock),
-        inventory_shown=int(raw["inventory"]) if raw.get("inventory") is not None else None,
-        qty_cap=int(raw["max_qty"]) if raw.get("max_qty") is not None else (
-            int(raw["max_allowed_quantity"]) if raw.get("max_allowed_quantity") is not None else None
-        ),
+        inventory_shown=int(inventory) if inventory is not None and not isinstance(inventory, dict) else None,
+        qty_cap=int(qty) if qty is not None and not isinstance(qty, dict) else None,
         is_sponsored=raw.get("is_ad") if raw.get("is_ad") is not None else raw.get("is_sponsored"),
         shelf_position=int(raw.get("position") or position),
         organic_rank=int(raw["organic_rank"]) if raw.get("organic_rank") is not None else None,
-        rating=float(raw["rating"]) if raw.get("rating") is not None else None,
-        rating_count=int(raw["rating_count"]) if raw.get("rating_count") is not None else None,
+        rating=rating,
+        rating_count=rating_count,
         image_url=(raw.get("image_url") or (raw.get("images") or [None])[0]),
         product_url=raw.get("product_url") or raw.get("deeplink"),
         offer_text=raw.get("offer_text") or (str(discount_text) if discount_text else None),
@@ -302,13 +351,11 @@ def _listing_from_card(card, position: int, query: str) -> ParsedListing | None:
     if not name:
         return None
     in_stock = "out of stock" not in lower and "notify me" not in lower
-    sponsored = lower.startswith("ad ") or lower.startswith("ad") and "add" not in lower[:4]
+    card_html = (getattr(card, "html", None) or "").lower()
+    sponsored = "ad_without_bg" in card_html
     if lower.startswith("sponsored") or " sponsored " in f" {lower} ":
         sponsored = True
-    img = card.css_first("img")
-    image_url = None
-    if img:
-        image_url = img.attributes.get("src") or img.attributes.get("data-src")
+    image_url = _card_image_url(card)
     href = card.attributes.get("href")
     product_url = href if href and href.startswith("http") else None
     if not product_url and pid:
@@ -335,6 +382,42 @@ def _listing_from_card(card, position: int, query: str) -> ParsedListing | None:
         delivery_time_text=f"{eta} mins" if eta else None,
         search_query=query,
     )
+
+
+_CDN = "cdn.grofers.com"
+
+
+def _urls_from_attr(value: str | None) -> list[str]:
+    if not value:
+        return []
+    out: list[str] = []
+    for part in value.split(","):
+        url = part.strip().split(" ")[0].strip()
+        if url.startswith("//"):
+            url = "https:" + url
+        if url.startswith("data:"):
+            continue
+        if _CDN in url and url.startswith("http"):
+            out.append(url)
+        elif url.startswith("http") and "grofers" in url:
+            out.append(url)
+    return out
+
+
+def _card_image_url(card) -> str | None:
+    ranked: list[tuple[int, str]] = []
+    for img in card.css("img"):
+        classes = f"{img.attributes.get('class') or ''} {img.attributes.get('style') or ''}"
+        placeholder = "opacity-0" in classes
+        candidates: list[str] = []
+        for attr in ("src", "data-src", "srcset", "data-srcset"):
+            candidates.extend(_urls_from_attr(img.attributes.get(attr)))
+        for url in candidates:
+            ranked.append((1 if placeholder else 0, url))
+    if not ranked:
+        return None
+    ranked.sort()
+    return ranked[0][1]
 
 
 def _to_float(text: str) -> float | None:
