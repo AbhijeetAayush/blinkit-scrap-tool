@@ -6,7 +6,11 @@ from src.domain.models import FetchResult
 class _Inner:
     vendor = "scrapingbee"
 
+    def __init__(self) -> None:
+        self.last_cookies: str | None = None
+
     def fetch(self, url: str, **kwargs) -> FetchResult:
+        self.last_cookies = kwargs.get("cookies")
         return FetchResult(
             html="<html></html>",
             cookies="session=abc; Path=/; gr_1_lat=28.4; gr_1_lon=77.0",
@@ -31,3 +35,20 @@ def test_cookie_memory_unlocker_keeps_lat_after_set_cookie():
     assert unlocker.session_cookies is not None
     assert "gr_1_lat=18.4478" in unlocker.session_cookies
     assert "gr_1_lon=73.8371" in unlocker.session_cookies
+
+
+def test_geo_kwargs_do_not_drop_redis_session_token():
+    """Catalog passes geo Cookie string; Redis jar must still forward session tokens."""
+    inner = _Inner()
+    unlocker = _CookieMemoryUnlocker(
+        inner,
+        cookies="session=tok123; other=1; gr_1_lat=28.0; gr_1_lon=77.0",
+    )
+    job_geo = "gr_1_lat=18.4478; gr_1_lon=73.8371; lat=18.4478; lon=73.8371"
+    unlocker.fetch("https://blinkit.com/s/?q=rice", cookies=job_geo)
+    sent = inner.last_cookies or ""
+    assert "gr_1_lat=18.4478" in sent
+    assert "gr_1_lon=73.8371" in sent
+    assert "session=tok123" in sent
+    # Job coords must win over Redis foreign lat/lon
+    assert "gr_1_lat=28.0" not in sent
