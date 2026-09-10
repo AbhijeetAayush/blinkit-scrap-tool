@@ -25,7 +25,13 @@ class _CookieMemoryUnlocker:
         return self._cookies
 
     def fetch(self, url: str, **kwargs) -> FetchResult:
-        cookies = kwargs.get("cookies") or self._cookies
+        # Job/geo cookies are KEEP source; Redis jar fills session tokens.
+        # Do not drop the jar when catalog passes a truthy geo Cookie string.
+        job_cookies = kwargs.get("cookies")
+        if job_cookies and self._cookies:
+            cookies = merge_cookie_header(job_cookies, self._cookies)
+        else:
+            cookies = job_cookies or self._cookies
         kwargs["cookies"] = cookies
         result = self._inner.fetch(url, **kwargs)
         self.last_html = result.html or ""
