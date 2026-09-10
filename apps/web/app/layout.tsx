@@ -8,12 +8,15 @@ import "./globals.css";
 
 const display = Fraunces({
   subsets: ["latin"],
+  weight: ["500", "600"],
   variable: "--font-display",
-  display: "swap",
+  display: "optional",
+  preload: false,
 });
 
 const sans = DM_Sans({
   subsets: ["latin"],
+  weight: ["400", "500", "600"],
   variable: "--font-sans",
   display: "swap",
 });
@@ -28,7 +31,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en">
       <body className={`${display.variable} ${sans.variable} font-sans antialiased`}>
         <Nav />
-        <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+        <main className="page mx-auto max-w-6xl px-4 py-7">{children}</main>
       </body>
     </html>
   );

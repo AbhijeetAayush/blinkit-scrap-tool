@@ -2,16 +2,254 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body {
+:root {
+  --paper: #f4efe6;
+  --paper-2: #fffdf8;
+  --ink: #14160f;
+  --ink-soft: rgb(20 22 15 / 0.62);
+  --line: rgb(20 22 15 / 0.1);
+  --moss: #2a5a30;
+  --lime: #d6f26a;
+  --oos: #b42318;
+  --stock: #187a3c;
+}
+
+html {
   min-height: 100%;
+  scrollbar-gutter: stable;
 }
 
 body {
-  background: #f3eee3;
-  color: #16180f;
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 480px at 0% -10%, rgb(214 242 106 / 0.18), transparent 50%),
+    var(--paper);
+  color: var(--ink);
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  font: inherit;
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+.page {
+  contain: layout style;
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: rgb(255 253 248 / 0.86);
+  border-radius: 1.15rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--ink);
+  color: var(--lime);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 550;
+  transition: transform 80ms ease-out, opacity 80ms ease-out;
+  will-change: transform;
+}
+
+.btn:hover {
+  opacity: 0.92;
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+  padding: 0.45rem 0.9rem;
+  font-size: 0.875rem;
+  transition: transform 80ms ease-out, background 80ms ease-out;
+}
+
+.btn-ghost:hover {
+  background: #fff;
+}
+
+.btn-ghost:active {
+  transform: scale(0.98);
+}
+
+.field {
+  border-radius: 0.7rem;
+  border: 1px solid var(--line);
+  background: #fff;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.field:focus {
+  outline: 2px solid rgb(42 90 48 / 0.35);
+  outline-offset: 1px;
+}
+
+.link {
+  color: var(--moss);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+.badge-stock {
+  background: rgb(24 122 60 / 0.12);
+  color: var(--stock);
+}
+
+.badge-oos {
+  background: rgb(180 35 24 / 0.1);
+  color: var(--oos);
+}
+
+.badge-ad {
+  background: rgb(20 22 15 / 0.08);
+  color: var(--ink);
+}
+
+.table-wrap {
+  contain: content;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--line);
+  background: rgb(255 253 248 / 0.9);
+  border-radius: 1.15rem;
+  max-height: min(70vh, 44rem);
+}
+
+.shelf-table,
+.data-table {
+  width: 100%;
+  min-width: 960px;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: left;
+  font-size: 0.8125rem;
+}
+
+.shelf-table th,
+.data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #efe9dc;
+  color: rgb(20 22 15 / 0.55);
+  font-weight: 600;
+  padding: 0.55rem 0.75rem;
+  white-space: nowrap;
+}
+
+.shelf-table td,
+.data-table td {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid rgb(20 22 15 / 0.05);
+  white-space: nowrap;
+}
+
+.shelf-table tbody tr:hover td,
+.data-table tbody tr:hover td {
+  background: rgb(214 242 106 / 0.12);
+}
+
+.name-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--paper-2);
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 550;
+}
+
+.shelf-table tbody tr:hover .name-cell {
+  background: #f7f8e8;
+}
+
+.store-cell {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.empty-cell {
+  color: rgb(20 22 15 / 0.5);
+  padding: 1.25rem 0.75rem !important;
+}
+
+.nav-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  border-bottom: 1px solid var(--line);
+  background: rgb(244 239 230 / 0.96);
+}
+
+.nav-ghost {
+  color: rgb(20 22 15 / 0.5);
+}
+
+.nav-ghost:hover {
+  color: var(--ink);
+}
+
+.skel {
+  border-radius: 0.75rem;
+  background: linear-gradient(90deg, rgb(20 22 15 / 0.06), rgb(20 22 15 / 0.1), rgb(20 22 15 / 0.06));
+  background-size: 200% 100%;
+  animation: sheen 1.1s linear infinite;
+}
+
+@keyframes sheen {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .btn-ghost,
+  .skel {
+    transition: none;
+    animation: none;
+    transform: none;
+  }
 }
